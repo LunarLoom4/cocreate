@@ -21,6 +21,10 @@ export class Page
     @board.clear()
     @transform = new storage.Variable "#{@room.id}.#{@id}.transform",
       defaultTransform(), false
+    ## Marker of the latest restoration (from deletion) that this browser has
+    ## shown zoomed to fit; see `fitRestored`.
+    @restoredSeen = new storage.Variable "#{@room.id}.#{@id}.restored",
+      null, false
     @board.setTransform @transform.get()
     @grid = new Grid @
     @observeObjects()
@@ -42,8 +46,19 @@ export class Page
       unless @gridMode == gridMode
         @gridMode = gridMode
         Tracker.nonreactive => @grid.update()
+      ## A page that was brought back from deletion opens zoomed to fit,
+      ## instead of in the view it had when it was deleted.
+      if (restored = data?.restored)? and restored != @fitPending and
+         restored != @restoredSeen.get()
+        @fitPending = restored
+        Tracker.nonreactive => @fitRestored restored
+    ## Redraw grid once layout has settled, in case the board's size changed
+    ## while this page was being set up.
+    Meteor.defer => @grid.update() unless @stopped
   stop: ->
+    @stopped = true
     @auto.stop()
+    @fitAuto?.stop()
     @board.onRetransform = null
     @render.stop()
     @remotesRender.stop()
@@ -51,6 +66,19 @@ export class Page
     @remotesObserver.stop()
   data: ->
     Pages.findOne @id
+  ## Zoom to fit all objects (or reset the view if the page is empty), once
+  ## the room has finished loading so that all objects are there.
+  fitRestored: (restored) ->
+    @fitAuto?.stop()
+    @fitAuto = Tracker.autorun (computation) =>
+      return if @stopped or @room.loading()
+      computation.stop()
+      elts = @board.renderedChildren()
+      if elts.length
+        @board.zoomToFit @board.renderedBBox elts
+      else
+        @board.setTransform defaultTransform()
+      @restoredSeen.set restored
   observeObjects: ->
     @board.render = @render = new RenderObjects @board
     #dbvt_svg = dom.create 'g'

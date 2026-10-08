@@ -1,4 +1,5 @@
 :root
+  --delete-color: #d32f2f  // trash can of the Delete Pages button
   --palette-size: 32px
   // The following grow to accomodate scrollbars if needed:
   --palette-color: #ccc
@@ -10,6 +11,7 @@
   --name-width: 8em
 
 .dark
+  --delete-color: #ef5350
   --palette-color: #333
   --palette-border: 2px #666
   --tooltip-color: hsl(60, 50%, 25%)
@@ -454,6 +456,165 @@ body:not(.history)
 .modal-title
   font-weight: bold
   font-size: larger
+
+// Delete Pages dropdown (below its button) and confirmation (centered)
+.pageDelMenu, .pageDelDialog, .pageDelNotice
+  background: var(--palette-color)
+  border: var(--palette-border) outset
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35)
+  line-height: 1.3
+.pageDelMenu
+  position: fixed
+  z-index: 100
+  width: 16em
+  padding: 4px
+  display: flex
+  flex-direction: column
+  gap: 4px
+.pageDelOption, .pageDelHist, .pageDelDialog button, .pageDelNotice button
+  font: inherit
+  color: inherit
+  background: transparent
+  text-align: left
+  button(2px)
+.pageDelOption
+  display: flex
+  align-items: center
+  gap: 8px
+  padding: 2px 8px 2px 2px
+  white-space: nowrap
+  svg
+    flex: none
+    width: 28px
+    height: 28px
+  small
+    display: block
+    font-size: 75%
+    opacity: 0.8
+    white-space: normal
+    text-wrap: balance
+  &:hover:not(:disabled), &:focus-visible
+    background: rgba(0, 0, 0, 0.12)
+  &:disabled
+    cursor: not-allowed
+    opacity: 0.5
+.pageDelHistory  // Undo Delete / Redo Delete, centered below the four choices
+  display: flex
+  justify-content: center
+  gap: 8px
+  margin-top: 4px
+  padding-top: 8px
+  border-top: 1px solid rgba(128, 128, 128, 0.55)
+.pageDelHist
+  flex: 1 1 0
+  min-width: 0  // two equal buttons that always fit the menu's width
+  display: flex
+  align-items: center
+  justify-content: center
+  gap: 5px
+  padding: 4px
+  font-size: 14px
+  white-space: nowrap
+  .histIcon
+    flex: none
+    display: flex
+    svg
+      width: 13px
+      height: 13px
+  span
+    min-width: 0
+    overflow: hidden
+    text-overflow: ellipsis
+  &:hover:not(:disabled), &:focus-visible
+    background: rgba(0, 0, 0, 0.12)
+  &:disabled
+    cursor: not-allowed
+    opacity: 0.5
+[data-tool="pageDel"] svg .delCan  // toolbar button: red trash can
+  fill: var(--delete-color)
+.delIcon
+  .base
+    fill: currentColor
+  .halo  // outline in background color, to separate overlays from trash can
+    fill: none
+    stroke: var(--palette-color)
+    stroke-width: 4
+    stroke-linejoin: round
+    stroke-linecap: round
+    &.fill
+      fill: var(--palette-color)
+  .sheet
+    fill: var(--palette-color)
+    stroke: currentColor
+    stroke-width: 1.5
+    stroke-linejoin: round
+  .line, .arc
+    fill: none
+    stroke: currentColor
+    stroke-width: 1.8
+    stroke-linecap: round
+    stroke-linejoin: round
+  .head
+    fill: currentColor
+  text
+    font-family: inherit
+    font-weight: 900
+    font-size: 13px
+    &.halo
+      fill: var(--palette-color)
+    &.txt
+      fill: currentColor
+.pageDelVeil
+  position: fixed
+  top: 0
+  left: 0
+  right: 0
+  bottom: 0
+  z-index: 200
+  display: flex
+  align-items: center
+  justify-content: center
+  background: rgba(0, 0, 0, 0.15)
+.pageDelDialog
+  width: 22em
+  max-width: calc(100% - 32px)
+  padding: 16px 20px
+  p
+    margin: 0 0 16px
+  .pageDelButtons
+    display: flex
+    gap: 10px
+  button
+    flex: 1
+    padding: 6px 10px
+    text-align: center
+  .danger
+    color: #fff
+    background: #c33
+    &:hover
+      background: #d44
+
+// "Pages ... were deleted. Bring them back?" (does not block drawing)
+.pageDelNotice
+  position: fixed
+  z-index: 90
+  top: calc(var(--palette-size) + 12px)
+  left: 50%
+  transform: translateX(-50%)
+  width: 22em
+  max-width: calc(100% - 32px)
+  box-sizing: border-box
+  padding: 12px 16px
+  p
+    margin: 0 0 12px
+    text-wrap: balance
+  .pageDelButtons
+    display: flex
+    gap: 10px
+  button
+    flex: 1
+    padding: 4px 10px
+    text-align: center
 
 .close
   float: right

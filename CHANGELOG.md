@@ -7,6 +7,20 @@ To see every change with descriptions aimed at developers, see
 As a continuously updated web app, Cocreate uses dates
 instead of version numbers.
 
+## Unreleased
+
+* Add Delete Pages button, with choices to delete the current page, all pages
+  to its left, all pages to its right, or all pages (leaving one blank page),
+  for everyone in the room.  Each choice asks for confirmation.
+* Deleting pages is reversible, and no data is removed.
+  The same dropdown has **Undo Delete** and **Redo Delete** buttons, separate
+  from the normal Undo/Redo, which bring back the pages of your last deletions
+  (up to 40 per room) next to their old neighbors, and delete them again.
+  You stay on the page you are viewing, unless Redo Delete deletes it.
+  Everyone else in the room is asked whether to bring deleted pages back,
+  live and when they next open the room.
+  Pages that are brought back open zoomed to fit.
+
 ## 2026-05-22
 
 * Fix SVG export of images.
