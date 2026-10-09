@@ -142,19 +142,28 @@ export restorePages = (ids) ->
 ## state, oldest first.
 ##
 ## The newest `historyLimit` entries of each state are kept for each room.  They
-## are saved in this browser, one by one (see ./lib/storageSet), so they survive
-## a reload and are shared by its tabs without ever overwriting each other.
+## are saved in this browser (see ./lib/storageSet), so they survive a reload and
+## are shared by its tabs.  Every state an entry has been in is a version of it,
+## saved under a key of its own (see `versionKey`).  Changing an entry saves its
+## new version and then removes the old ones, and removing an entry removes only
+## the versions that the tab has seen.  A browser can't check an item and remove
+## it in one step, so this is what keeps a tab from removing an entry that
+## another tab has changed in the meantime: that is a newer version, under
+## another key.  Of the versions of an entry, the newest counts.
 ## Nothing here is connected to the normal Undo/Redo (Ctrl-Z/Ctrl-Y).
 
 export historyLimit = 40
 kinds = ['current', 'left', 'right', 'all']
 states = ['undo', 'redo']
 
+## The key of a version of an entry, within the history of its room
+versionKey = (entry) -> "#{entry.id}.#{entry.moved}"
+
 isStringList = (list) ->
   Array.isArray(list) and list.every (item) -> typeof item == 'string'
-validEntry = (entry, id) ->
-  entry? and entry.id == id and entry.state in states and
-  Number.isFinite(entry.moved) and entry.kind in kinds and
+validEntry = (entry, key) ->
+  entry? and typeof entry.id == 'string' and Number.isFinite(entry.moved) and
+  key == versionKey(entry) and entry.state in states and entry.kind in kinds and
   isStringList(entry.ids) and entry.ids.length > 0 and
   isStringList(entry.order)
 
@@ -162,27 +171,49 @@ histories = {}
 getHistory = (roomId) ->
   histories[roomId] ?= new StorageSet "#{roomId}.pageDelete.", validEntry
 
+## The newest version of each entry that is saved
+currentEntries = (history) ->
+  newest = new Map
+  for entry in history.all()
+    older = newest.get entry.id
+    newest.set entry.id, entry unless older? and older.moved >= entry.moved
+  Array.from newest.values()
+
 ## The two lists (oldest first), ignoring anything malformed in storage.
 ## Before changing the history, read it `fresh`, to see what other tabs saved.
 readHistory = (roomId, fresh) ->
   history = getHistory roomId
   history.load() if fresh
-  entries = history.all()
+  entries = currentEntries history
   ## (entries put at the very same moment by two tabs: by ID, the same in both)
   byMoved = (a, b) -> a.moved - b.moved or (if a.id < b.id then -1 else 1)
   undo: (e for e in entries when e.state == 'undo').sort byMoved
   redo: (e for e in entries when e.state == 'redo').sort byMoved
 
+## Remove the versions of entry `id` that this tab knows of, but none newer
+## than `upTo` (a `moved`).  Older ones go too, so that none is left to count
+## again once the newer ones are gone.
+forgetEntry = (history, id, upTo = Infinity) ->
+  for entry in history.all() when entry.id == id and entry.moved <= upTo
+    history.remove versionKey entry
+  return
+
 ## Save `entry` as the newest one in `state`, and forget the oldest ones
-## beyond the limit.
+## beyond the limit.  Returns the `moved` of the version it saved.
 putEntry = (roomId, entry, state) ->
   history = getHistory roomId
-  moved = Math.max Date.now(), 1 + Math.max 0, (e.moved for e in history.all())...
-  history.put entry.id, Object.assign {}, entry, {state, moved}
+  known = history.all()
+  moved = Math.max Date.now(), 1 + Math.max 0, (e.moved for e in known)...
+  saved = history.put versionKey({id: entry.id, moved}),
+    Object.assign {}, entry, {state, moved}
+  ## (If the browser refused the new version, keep the old ones: they are
+  ## all that it has.)
+  if saved
+    history.remove versionKey e for e in known when e.id == entry.id
   {undo, redo} = readHistory roomId
   for list in [undo, redo]
-    history.remove e.id for e in list[...-historyLimit]
-  return
+    forgetEntry history, e.id for e in list[...-historyLimit]
+  moved
 
 ## A new deletion: it can be undone, and what could be redone before it can't
 ## be any more.  Those entries are forgotten only once the server accepts the
@@ -193,30 +224,35 @@ addDeletion = (roomId, entry) ->
   putEntry roomId, entry, 'undo'
   {id: e.id, moved: e.moved} for e in redo
 
-## The server accepted a deletion: forget the redo entries `forgotten`, unless
-## they are not the same by now (e.g., another tab redid one and undid it again,
-## which makes it a newer entry, to be kept).
+## The server accepted a deletion: forget the redo entries `forgotten`, as they
+## were when it was sent (the versions `{id, moved}`).  Where another tab has
+## redone and undone one of them again meanwhile, that is a newer version of
+## it, and stays.
 acceptDeletion = (roomId, forgotten) ->
   history = getHistory roomId
   history.load()
-  for {id, moved} in forgotten
-    entry = history.get id
-    history.remove id if entry?.state == 'redo' and entry.moved == moved
+  forgetEntry history, id, moved for {id, moved} in forgotten
   return
 
 ## The server refused a deletion, so there is nothing to undo.
 dropEntry = (roomId, id) ->
-  getHistory(roomId).remove id
+  history = getHistory roomId
+  history.load()
+  forgetEntry history, id
   return
 
 ## Move entry `id` from state `from` to state `to` (as `replacement`, if given).
-moveEntry = (roomId, from, to, id, replacement) ->
+## With `expected` (the `moved` of a version that this tab saved earlier), only
+## if that version is still the newest, so that undoing a move leaves alone what
+## another tab has done to the entry since.  Returns the `moved` of the new
+## version, or nothing if the entry was not moved.
+moveEntry = (roomId, from, to, id, replacement, expected) ->
   history = getHistory roomId
   history.load()
-  entry = history.get id
+  entry = currentEntries(history).find (e) -> e.id == id
   return unless entry?.state == from
+  return if expected? and entry.moved != expected
   putEntry roomId, replacement ? entry, to
-  return
 
 ## What Undo Delete would do for `entry`: bring back the pages of the deletion
 ## that are not in the room now, and the numbers they will have.  `undefined`
@@ -316,11 +352,11 @@ export undoDelete = (id) ->
   pages = room.data()?.pages ? []
   missing = (pageId for pageId in entry.ids when pageId not in pages)
   return unless missing.length
-  moveEntry room.id, 'undo', 'redo', id
+  moved = moveEntry room.id, 'undo', 'redo', id
   Meteor.call 'pagesRestore', missing, Date.now(), entry.order, (error) ->
     if error?
       console.error "Failed to restore pages on server: #{error}"
-      moveEntry room.id, 'redo', 'undo', id
+      moveEntry room.id, 'redo', 'undo', id, null, moved if moved?
   return
 
 ## Redo Delete, for the entry that was asked about: delete its pages that are in
@@ -340,11 +376,11 @@ export redoDelete = (id) ->
   else
     target = replacementFor ids
   removePages ids, target, (present, order) ->
-    moveEntry room.id, 'redo', 'undo', id,
+    moved = moveEntry room.id, 'redo', 'undo', id,
       Object.assign {}, entry, {ids: present, order, at: Date.now()}
-    entry
-  , (original) ->
-    moveEntry room.id, 'undo', 'redo', id, original
+    {original: entry, moved}
+  , ({original, moved}) ->
+    moveEntry room.id, 'undo', 'redo', id, original, moved if moved?
   return
 
 ## "5", "5 and 8", "1 to 4, 8 and 10"

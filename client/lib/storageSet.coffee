@@ -67,13 +67,14 @@ export class StorageSet
 
   ## Save `item`, replacing the item with the same ID.  If localStorage takes it
   ## again after refusing something (e.g., it was full), the items it refused
-  ## are saved as well.
+  ## are saved as well.  Returns whether localStorage took `item`.
   put: (id, item) ->
     @items.set id, item
-    if @save id
+    saved = @save id
+    if saved
       @save other for other from Array.from @unsaved
     @touch()
-    return
+    saved
   ## Save the item with this ID, and note whether localStorage took it.
   save: (id) ->
     return false unless (item = @items.get id)?
