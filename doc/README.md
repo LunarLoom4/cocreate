@@ -836,6 +836,9 @@ This button opens a dropdown menu with four choices:
 **Delete All Pages to Right**, and **Delete All Pages**.
 Each choice asks for confirmation in a dialog in the middle of the screen,
 then deletes those pages for everyone in the room.
+If the pages change while the dialog is open (for example, someone else
+deletes some of them), the dialog updates to say what it will really do,
+or says that there is nothing left to do.
 Anyone who was viewing a deleted page moves to the next page after it that
 is still there, or to the nearest page before it if there is none.
 Choices that have nothing to delete are disabled, and the only page
@@ -883,7 +886,8 @@ You can bring them back in two ways:
   a room in a browser, you're not asked about earlier deletions.)
 
 A page that is brought back opens zoomed to fit its objects
-the first time you go to it.
+the first time you go to it, once its images and formulas have appeared
+(if you pan or zoom before that, your view stays).
 
 ### Your Name
 

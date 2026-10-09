@@ -8,6 +8,9 @@ import {planOrderRestore, planRestore} from './pageOrder'
 
 @Pages = new Mongo.Collection 'pages'
 
+## How often `pagesRestore` plans again when the room's pages keep changing
+restoreAttempts = 10
+
 export checkPage = (page) ->
   if validId(page) and data = Pages.findOne page
     data
@@ -116,33 +119,48 @@ Meteor.methods
     check order, Match.Optional [String]
     pageIds = Array.from new Set pageIds
     throw new Meteor.Error "No pages to restore" unless pageIds.length
-    room = checkRoom checkPage(pageIds[0]).room
+    roomId = checkPage(pageIds[0]).room
     for pageId in pageIds
-      unless checkPage(pageId).room == room._id
-        throw new Meteor.Error "Page #{pageId} is not in room #{room._id}"
-    pages = room.pages ? []
-    pageIds = (pageId for pageId in pageIds when pageId not in pages)
-    return [] unless pageIds.length
-    {steps} =
-      if order?
-        planOrderRestore pages, order, pageIds
-      else
-        prevOf = (pageId) -> Pages.findOne(pageId)?.deleted?.prev
-        planRestore pages, pageIds, prevOf
-    restored = []
-    for {id, pos} in steps
-      selector = _id: room._id
-      selector.pages = $ne: id unless @isSimulation  # not already restored
-      updated = Rooms.update selector,
-        $push: pages:
-          $each: [id]
-          $position: pos
-      restored.push id if updated
-    for id in restored
+      unless checkPage(pageId).room == roomId
+        throw new Meteor.Error "Page #{pageId} is not in room #{roomId}"
+    prevOf = (pageId) -> Pages.findOne(pageId)?.deleted?.prev
+    ## The new page list is written in a single update, which applies only if
+    ## the room's page list is still the one the plan was made from.  If
+    ## someone changed it in between (adding, deleting, or restoring pages),
+    ## plan again from the new list, so that the pages never land in the wrong
+    ## places.
+    missing = deletedAt = null
+    for attempt in [1..restoreAttempts]
+      room = checkRoom roomId
+      pages = room.pages ? []
+      missing = (pageId for pageId in pageIds when pageId not in pages)
+      return [] unless missing.length
+      ## Which deletion each page is being restored from
+      deletedAt = {}
+      deletedAt[pageId] = Pages.findOne(pageId)?.deleted?.at for pageId in missing
+      {pages: newPages} =
+        if order?
+          planOrderRestore pages, order, missing
+        else
+          planRestore pages, missing, prevOf
+      if @isSimulation
+        Rooms.update roomId, $set: pages: newPages
+        break
+      selector = _id: roomId
+      selector.pages = if room.pages? then pages else $exists: false
+      break if Rooms.update selector, $set: pages: newPages
+      if attempt == restoreAttempts
+        throw new Meteor.Error "The pages of room #{roomId} keep changing"
+    ## Clear the deletion marker, but only the one these pages were restored
+    ## from: if someone deleted one of them again meanwhile, its new marker
+    ## must stay, so that others are still offered to bring it back.
+    for pageId in missing
+      selector = _id: pageId
+      selector['deleted.at'] = deletedAt[pageId] if deletedAt[pageId]?
       modifier = $unset: deleted: ''
       modifier.$set = restored: token if token?
-      Pages.update id, modifier, channel: "rooms::#{room._id}::pages"
-    restored
+      Pages.update selector, modifier, channel: "rooms::#{roomId}::pages"
+    missing
 
   gridToggle: (page, gridType) ->
     check page, String

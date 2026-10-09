@@ -59,6 +59,7 @@ export class Page
     @stopped = true
     @auto.stop()
     @fitAuto?.stop()
+    @fitWait?()
     @board.onRetransform = null
     @render.stop()
     @remotesRender.stop()
@@ -67,18 +68,28 @@ export class Page
   data: ->
     Pages.findOne @id
   ## Zoom to fit all objects (or reset the view if the page is empty), once
-  ## the room has finished loading so that all objects are there.
+  ## the room has finished loading so that all objects are there, and their
+  ## images and LaTeX formulas are displayed so that they are taken into account.
+  ## If the viewer pans or zooms in the meantime, their view stays.
   fitRestored: (restored) ->
     @fitAuto?.stop()
+    @fitWait?()
     @fitAuto = Tracker.autorun (computation) =>
       return if @stopped or @room.loading()
       computation.stop()
-      elts = @board.renderedChildren()
-      if elts.length
-        @board.zoomToFit @board.renderedBBox elts
-      else
-        @board.setTransform defaultTransform()
-      @restoredSeen.set restored
+      {x, y, scale} = @board.transform
+      @fitWait = @render.whenSettled =>
+        @fitWait = null
+        return if @stopped
+        t = @board.transform
+        moved = t.x != x or t.y != y or t.scale != scale
+        unless moved
+          elts = @board.renderedChildren()
+          if elts.length
+            @board.zoomToFit @board.renderedBBox elts
+          else
+            @board.setTransform defaultTransform()
+        @restoredSeen.set restored
   observeObjects: ->
     @board.render = @render = new RenderObjects @board
     #dbvt_svg = dom.create 'g'

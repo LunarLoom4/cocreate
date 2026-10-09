@@ -1,4 +1,4 @@
-import {createEffect, createSignal, For, on as on_, onCleanup, Show} from 'solid-js'
+import {createEffect, createSignal, Index, on as on_, onCleanup, Show} from 'solid-js'
 import {Portal} from 'solid-js/web'
 
 import {createTracker} from 'solid-meteor-data'
@@ -68,11 +68,27 @@ defineTool
 
 [menu, setMenu] = createSignal null     # {left, top} while dropdown is open
 [pending, setPending] = createSignal null  # what awaits confirmation:
-  # {action: 'delete', ids, blank, kind, ...} or {action: 'undo'/'redo', id, ...}
-  # plus `text` to ask, `label` of the confirm button, `danger` for its style
+  # {action: 'delete', kind} (one of the four choices), or {action: 'undo'}
+  # or {action: 'redo'}.  What it asks and does is worked out from the room as
+  # it is at that moment (see `dialog` below), not when the choice was made.
 
 closeMenu = -> setMenu null
 cancelDelete = -> setPending null
+
+## Close the confirmation dialog.  When that is done with the keyboard, the
+## buttons the focus was on go away with the dialog, so hand it to the Delete
+## Pages tool in the toolbar, to keep the keyboard user's place.  (Toolbar tools
+## are not in the tab order, so it takes `tabindex="-1"` to be focusable by
+## script.  Mouse users don't need this: a focused tool would just show its
+## tooltip.)
+closeDialog = (byKeyboard) ->
+  hadFocus = document.activeElement?.closest? '.pageDelDialog'
+  cancelDelete()
+  if byKeyboard and hadFocus
+    if (button = document.querySelector '[data-tool="pageDel"]')?
+      button.tabIndex = -1 unless button.hasAttribute 'tabindex'
+      button.focus()
+  return
 
 menuWidth = 256  # 16em; keep in sync with `.pageDelMenu` in main.styl
 
@@ -218,7 +234,19 @@ DeleteOverlays = ->
       switch e.key
         when 'Escape'
           e.preventDefault()
-          if pending() then cancelDelete() else closeMenu()
+          if pending() then closeDialog true else closeMenu()
+        when 'Tab'
+          ## Keep the keyboard focus inside the confirmation dialog
+          return unless pending()
+          buttons = Array.from document.querySelectorAll '.pageDelDialog button'
+          return unless buttons.length
+          at = buttons.indexOf document.activeElement
+          if e.shiftKey and at <= 0
+            e.preventDefault()
+            buttons[buttons.length - 1].focus()
+          else if not e.shiftKey and (at < 0 or at == buttons.length - 1)
+            e.preventDefault()
+            buttons[0].focus()
         when 'ArrowDown', 'ArrowUp'
           return unless menu()
           e.preventDefault()
@@ -240,46 +268,66 @@ DeleteOverlays = ->
       window.removeEventListener 'keydown', onKeyDown, true
       window.removeEventListener 'resize', closeMenu
 
-  ## What the Undo Delete and Redo Delete buttons would do now
+  ## The four delete choices, and what the Undo Delete and Redo Delete buttons
+  ## would do.  Both follow the room while the menu is open: pages can be added,
+  ## deleted, or brought back by anyone at any time.
+  choices = createTracker -> deleteChoices()
   hist = createTracker -> historyInfo()
 
-  choose = (choice) -> (e) ->
+  ## What the confirmation dialog asks, and what its button does.  This is
+  ## worked out from the room as it is right now, so that the question always
+  ## matches what the button does, even if someone changes the pages while the
+  ## dialog is open.  When there is nothing left to do (e.g. someone else
+  ## already deleted those pages), it says so and loses its action button; it
+  ## stays open so that it doesn't vanish from under the pointer.
+  nothingToDo = text: 'The pages have changed, so there is nothing left to do.'
+  dialog = createTracker ->
+    return unless (asked = pending())?
+    switch asked.action
+      when 'delete'
+        choice = choices().find (c) -> c.kind == asked.kind
+        return nothingToDo if not choice? or choice.disabled
+        text: "#{choice.ask} You can reverse this with Undo Delete."
+        label: 'Delete'
+        danger: true
+        run: -> deletePages choice.ids, blank: choice.blank, kind: choice.kind
+      when 'undo'
+        return nothingToDo unless (info = hist().undo)?
+        text: info.ask
+        label: 'Undo Delete'
+        run: -> undoDelete info.id
+      when 'redo'
+        return nothingToDo unless (info = hist().redo)?
+        text: info.ask
+        label: 'Redo Delete'
+        danger: true
+        run: -> redoDelete info.id
+  ## If the action button goes away, keep the keyboard focus in the dialog
+  createEffect on_ (-> dialog()?.run?), (hasAction) ->
+    return if hasAction or not pending()
+    return unless (box = document.querySelector '.pageDelDialog')?
+    box.querySelector('button')?.focus() unless box.contains document.activeElement
+  , defer: true
+
+  choose = (kind) -> (e) ->
     e.stopPropagation()
-    return if choice.disabled
+    choice = choices().find (c) -> c.kind == kind
+    return if not choice? or choice.disabled
     closeMenu()
-    setPending
-      action: 'delete'
-      ids: choice.ids
-      blank: choice.blank
-      kind: choice.kind
-      text: "#{choice.ask} You can reverse this with Undo Delete."
-      label: 'Delete'
-      danger: true
+    setPending {action: 'delete', kind}
   chooseHist = (action) -> (e) ->
     e.stopPropagation()
-    return unless (info = hist()[action])?
+    return unless hist()[action]?
     closeMenu()
-    setPending
-      action: action
-      id: info.id
-      text: info.ask
-      label: if action == 'undo' then 'Undo Delete' else 'Redo Delete'
-      danger: action == 'redo'
+    setPending {action}
   confirm = (e) ->
     e.stopPropagation()
-    choice = pending()
-    cancelDelete()
-    return unless choice?
-    switch choice.action
-      when 'undo'
-        undoDelete choice.id
-      when 'redo'
-        redoDelete choice.id
-      else
-        deletePages choice.ids, blank: choice.blank, kind: choice.kind
+    chosen = dialog()
+    closeDialog e.detail == 0  # a keyboard "click" has no click count
+    chosen?.run?()
   cancel = (e) ->
     e.stopPropagation()
-    cancelDelete()
+    closeDialog e.detail == 0
   focusLater = (el) -> setTimeout (-> el.focus()), 0
 
   <>
@@ -287,18 +335,18 @@ DeleteOverlays = ->
       <Portal>
         <div class="pageDelMenu" role="menu" onClick={stop}
          style={left: "#{menu()?.left}px", top: "#{menu()?.top}px"}>
-          <For each={deleteChoices()}>{(choice) ->
+          <Index each={choices()}>{(choice) ->
             <button type="button" class="pageDelOption" role="menuitem"
-             disabled={choice.disabled} onClick={choose choice}>
-              <DeleteIcon kind={choice.kind}/>
+             disabled={choice().disabled} onClick={(e) -> choose(choice().kind) e}>
+              <DeleteIcon kind={choice().kind}/>
               <span>
-                {choice.label}
-                <Show when={choice.disabled}>
-                  <small>{choice.note}</small>
+                {choice().label}
+                <Show when={choice().disabled}>
+                  <small>{choice().note}</small>
                 </Show>
               </span>
             </button>
-          }</For>
+          }</Index>
           <div class="pageDelHistory">
             <button type="button" class="pageDelHist" role="menuitem"
              disabled={!hist().undo} onClick={chooseHist 'undo'}
@@ -319,16 +367,18 @@ DeleteOverlays = ->
     <Show when={pending()}>
       <Portal>
         <div class="pageDelVeil" onClick={cancel}>
-          <div class="pageDelDialog" role="alertdialog" onClick={stop}>
-            <p>{pending()?.text}</p>
+          <div class="pageDelDialog" role="alertdialog" aria-modal="true" onClick={stop}>
+            <p>{dialog()?.text}</p>
             <div class="pageDelButtons">
               <button type="button" ref={focusLater} onClick={cancel}>
-                Cancel
+                {if dialog()?.run then 'Cancel' else 'Close'}
               </button>
-              <button type="button" classList={danger: pending()?.danger}
-               onClick={confirm}>
-                {pending()?.label}
-              </button>
+              <Show when={dialog()?.run}>
+                <button type="button" classList={danger: dialog()?.danger}
+                 onClick={confirm}>
+                  {dialog()?.label}
+                </button>
+              </Show>
             </div>
           </div>
         </div>

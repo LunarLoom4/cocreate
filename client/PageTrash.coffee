@@ -24,6 +24,37 @@ unless validId browserId
   try
     window.localStorage.setItem 'browserId', browserId
 
+## Some things are remembered by this browser (see ./lib/storage), and every
+## tab of it has its own copy, which is told about changes made by other tabs
+## a moment after they happen.  Anything saved as a whole (a list) must
+## therefore be read afresh right before it is changed, or a tab would write back
+## what it knew before, and undo what another tab just did.
+##
+## Keys of the variables whose last save did not make it to the browser's
+## storage (it may be full or off): for them, the copy in memory is the newest.
+unsaved = new Set
+
+## Bring `variable` up to date with what is saved in this browser.
+refresh = (variable) ->
+  return variable if unsaved.has variable.key
+  try
+    json = window.localStorage.getItem variable.key
+    if json? and json != variable.constructor.stringify variable.get()
+      variable.setTemp variable.constructor.parse json
+  return variable
+
+## Set `variable`, and note whether it could be saved.
+save = (variable, value) ->
+  variable.set value
+  try
+    saved = window.localStorage.getItem(variable.key) ==
+            variable.constructor.stringify value
+  if saved
+    unsaved.delete variable.key
+  else
+    unsaved.add variable.key
+  return
+
 ## Deletions that this browser has already answered about in each room, as a
 ## list of deletion times (milliseconds).  It is `null` until the room is first
 ## opened in this browser, when nothing counts as new.
@@ -31,10 +62,10 @@ acks = {}
 getAck = (roomId) ->
   acks[roomId] ?= new storage.Variable "#{roomId}.pagesSeen", null
 addAck = (roomId, times) ->
-  variable = getAck roomId
+  variable = refresh getAck roomId
   current = variable.get() ? []
   added = (time for time in times when time? and time not in current)
-  variable.set current.concat added if added.length
+  save variable, current.concat added if added.length
   return
 
 deletedPages = (roomId) ->
@@ -80,8 +111,9 @@ replacementFor = (ids) ->
 ## page being viewed never disappears from under the viewer.  `sent(present,
 ## order)` is called as the deletion is sent, with the pages that are really
 ## being deleted and the room's page list from right before; what it returns
-## is given to `failed` if the server then refuses the deletion.
-removePages = (ids, target, sent, failed) ->
+## is given to `failed` if the server then refuses the deletion, or to
+## `accepted` if it accepts it.
+removePages = (ids, target, sent, failed, accepted) ->
   room = currentRoom()
   return unless room?
   run = ->
@@ -93,6 +125,8 @@ removePages = (ids, target, sent, failed) ->
       if error?
         console.error "Failed to delete pages on server: #{error}"
         failed? result
+      else
+        accepted? result
   if target?
     gotoThen target, run
   else
@@ -155,39 +189,52 @@ validEntries = (list) ->
   entry for entry in list when validEntry entry
 
 ## The two lists (oldest first), ignoring anything malformed in storage.
-readHistory = (roomId) ->
-  value = getHistory(roomId).get()
+## Before changing the history, read it `fresh` (see `refresh`).
+readHistory = (roomId, fresh) ->
+  variable = getHistory roomId
+  refresh variable if fresh
+  value = variable.get()
   undo: validEntries value?.undo
   redo: validEntries value?.redo
 
 writeHistory = (roomId, undo, redo) ->
-  getHistory(roomId).set
+  save getHistory(roomId),
     undo: undo[-historyLimit..]
     redo: redo[-historyLimit..]
   return
 
-## A new deletion: it can be undone, and nothing can be redone any more.
+## A new deletion: it can be undone, and what could be redone before it can't
+## be any more.  Those entries are forgotten only once the server accepts the
+## deletion (see `acceptDeletion`), so a refused deletion leaves them alone.
+## Returns their ids.
 addDeletion = (roomId, entry) ->
-  {undo} = readHistory roomId
+  {undo, redo} = readHistory roomId, true
   undo.push entry
-  writeHistory roomId, undo, []
+  writeHistory roomId, undo, redo
+  (e.id for e in redo)
+
+## The server accepted a deletion: forget the redo entries `forgotten`.
+acceptDeletion = (roomId, forgotten) ->
+  {undo, redo} = readHistory roomId, true
+  writeHistory roomId, undo, (e for e in redo when e.id not in forgotten)
+  return
+
+## The server refused a deletion, so there is nothing to undo.
+dropEntry = (roomId, id) ->
+  {undo, redo} = readHistory roomId, true
+  writeHistory roomId,
+    (e for e in undo when e.id != id)
+    (e for e in redo when e.id != id)
   return
 
 ## Move entry `id` from list `from` to list `to` (as `replacement`, if given).
 moveEntry = (roomId, from, to, id, replacement) ->
-  history = readHistory roomId
+  history = readHistory roomId, true
   entry = history[from].find (e) -> e.id == id
   return unless entry?
   history[from] = (e for e in history[from] when e.id != id)
   history[to].push replacement ? entry
   writeHistory roomId, history.undo, history.redo
-  return
-
-dropEntry = (roomId, id) ->
-  {undo, redo} = readHistory roomId
-  writeHistory roomId,
-    (e for e in undo when e.id != id)
-    (e for e in redo when e.id != id)
   return
 
 ## What Undo Delete would do for `entry`: bring back the pages of the deletion
@@ -270,10 +317,11 @@ export deletePages = (ids, {blank, kind} = {}) ->
       ids: present
       order: order
       at: Date.now()
-    addDeletion room.id, entry
-    entry
-  , (entry) ->
-    dropEntry room.id, entry.id  # the server refused, so nothing to undo
+    {entry, forgotten: addDeletion room.id, entry}
+  , ({entry}) ->
+    dropEntry room.id, entry.id
+  , ({forgotten}) ->
+    acceptDeletion room.id, forgotten
   return
 
 ## Undo Delete, for the entry that was asked about: bring back its pages that
@@ -282,7 +330,7 @@ export deletePages = (ids, {blank, kind} = {}) ->
 export undoDelete = (id) ->
   room = currentRoom()
   return unless room?
-  entry = readHistory(room.id).undo.find (e) -> e.id == id
+  entry = readHistory(room.id, true).undo.find (e) -> e.id == id
   return unless entry?
   pages = room.data()?.pages ? []
   missing = (pageId for pageId in entry.ids when pageId not in pages)
@@ -300,7 +348,7 @@ export undoDelete = (id) ->
 export redoDelete = (id) ->
   room = currentRoom()
   return unless room?
-  entry = readHistory(room.id).redo.find (e) -> e.id == id
+  entry = readHistory(room.id, true).redo.find (e) -> e.id == id
   return unless entry?
   pages = room.data()?.pages ? []
   ids = (pageId for pageId in entry.ids when pageId in pages)
@@ -349,9 +397,9 @@ export DeletedNotice = ->
   createEffect ->
     return unless loaded()
     roomId = currentRoom().id
-    variable = getAck roomId
+    variable = refresh getAck roomId
     return if variable.get()?
-    variable.set (
+    save variable, (
       for page in deletedPages roomId when page.deleted?.at?
         page.deleted.at.getTime()
     )

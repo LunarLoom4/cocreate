@@ -11,6 +11,9 @@ import {BBox, minSvgSize} from './BBox'
 import {penArrowAverage, averageDirection} from './Collision'
 #import {DBVT} from './DBVT'
 
+## How long `whenSettled` waits for images and formulas, at most
+settleTimeout = 3000
+
 export class RenderObjects
   constructor: (@board) ->
     @root = @board.root
@@ -18,14 +21,50 @@ export class RenderObjects
     @tex = {}
     @texQueue = []
     @texById = {}
+    @imagesLoading = new Set  # images that have not loaded (or failed) yet
+    @settledWaiters = []
     @bbox = {}
     @dashOffset = {}
     @arrows = new Set
     #@dbvt = new DBVT()
   stop: ->
     @stopped = true
+    @settledWaiters = []
     for arrowId from @arrows
       document.getElementById(arrowId)?.remove()
+  ## Images and LaTeX formulas show up a little after their objects are
+  ## rendered, and take up their space only then.  `settled` tells whether
+  ## all of those on the board are displayed.
+  settled: ->
+    for image from @imagesLoading when not image.isConnected
+      @imagesLoading.delete image  # its object is gone
+    return false if @imagesLoading.size
+    for formula, job of @tex when not job.svg?
+      return false
+    true
+  ## Call `callback` once everything is displayed (at once if it is), or after
+  ## `maxWait` milliseconds if something never shows up (e.g., an image that
+  ## does not load).  Returns a function that cancels the call.
+  whenSettled: (callback, maxWait = settleTimeout) ->
+    if @settled()
+      callback()
+      return ->
+    timer = null
+    cancel = =>
+      clearTimeout timer
+      @settledWaiters = (waiter for waiter in @settledWaiters when waiter != finish)
+      return
+    finish = ->
+      cancel()
+      callback()
+      return
+    timer = setTimeout finish, maxWait
+    @settledWaiters.push finish
+    cancel
+  settledCheck: ->
+    if @settled()
+      waiter() for waiter in @settledWaiters[..]
+    return
   id: (obj) ->
     ###
     `obj` can be an `ObjectDiff` object, in which case `id` is the object ID
@@ -459,6 +498,7 @@ export class RenderObjects
       for id of job.texts
         @texRender job, id
       @texJob()
+      @settledCheck()
   texRender: (job, id) ->
     ###
     Render all instances of `job` within text object with ID `id`.
@@ -537,10 +577,25 @@ export class RenderObjects
       y: obj.pts[0].y
       style: "opacity:#{obj.opacity}" if obj.opacity?
     if not options? or options.url or options.proxy or options.credentials
+      href = if obj.proxy then proxyUrl obj.url else obj.url
+      ## (An image whose address does not change does not load again.)
+      @watchImage image unless image.getAttribute('href') == href
       dom.attr image,
-        href: if obj.proxy then proxyUrl obj.url else obj.url
+        href: href
         crossorigin: if obj.credentials then 'use-credentials' else 'anonymous'
     image
+  ## Note that `image` is loading until it has loaded or failed to
+  watchImage: (image) ->
+    return if @imagesLoading.has image
+    @imagesLoading.add image
+    done = =>
+      image.removeEventListener 'load', done
+      image.removeEventListener 'error', done
+      @imagesLoading.delete image
+      @settledCheck()
+    image.addEventListener 'load', done
+    image.addEventListener 'error', done
+    return
   render: (obj, options) ->
     ## `options` should be an object mapping changed keys of `obj` to `true`,
     ## or absent (`undefined`, not `{}`), meaning `obj` is brand new.
