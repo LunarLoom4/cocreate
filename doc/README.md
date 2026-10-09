@@ -887,7 +887,8 @@ You can bring them back in two ways:
 
 A page that is brought back opens zoomed to fit its objects
 the first time you go to it, once its images and formulas have appeared
-(if you pan or zoom before that, your view stays).
+(if one is slow to appear, it zooms to fit again when it does, within
+the first minute; if you pan or zoom meanwhile, your view stays).
 
 ### Your Name
 

@@ -1,5 +1,6 @@
 import {check, Match} from 'meteor/check'
 import {Mongo} from 'meteor/mongo'
+import {Random} from 'meteor/random'
 
 import {validId} from './id'
 import {checkRoom} from './rooms'
@@ -61,8 +62,9 @@ Meteor.methods
     newPageId
 
   ## Deleting pages never removes any data: the pages just leave the room's
-  ## page list and get marked `deleted` (when, by whom, and which page came
-  ## before), so that `pagesRestore` can put them back where they were.
+  ## page list and get marked `deleted` (an `id` of this deletion, when, by
+  ## whom, and which page came before), so that `pagesRestore` can put them
+  ## back where they were.
   ## Returns the time of deletion (in milliseconds) from the server.
   pagesDel: (pageIds, remoteId) ->
     check pageIds, [String]
@@ -90,8 +92,13 @@ Meteor.methods
     unless updated or @isSimulation
       throw new Meteor.Error "Cannot delete every page in a room"
     at = new Date unless @isSimulation
+    ## `id` tells the markers of this deletion from those of any other deletion
+    ## of the same pages, even one made at the very same moment.  Each page is
+    ## marked after being removed, so that no overlapping `pagesRestore` (which
+    ## clears only the marker it started from) can leave it without a marker.
+    id = Random.id()
     for pageId in pageIds
-      deleted = prev: pages[pages.indexOf(pageId) - 1] ? null
+      deleted = {id, prev: pages[pages.indexOf(pageId) - 1] ? null}
       deleted.by = remoteId if remoteId?
       deleted.at = at if at?
       Pages.update pageId,
@@ -129,15 +136,15 @@ Meteor.methods
     ## someone changed it in between (adding, deleting, or restoring pages),
     ## plan again from the new list, so that the pages never land in the wrong
     ## places.
-    missing = deletedAt = null
+    missing = deletedIds = null
     for attempt in [1..restoreAttempts]
       room = checkRoom roomId
       pages = room.pages ? []
       missing = (pageId for pageId in pageIds when pageId not in pages)
       return [] unless missing.length
       ## Which deletion each page is being restored from
-      deletedAt = {}
-      deletedAt[pageId] = Pages.findOne(pageId)?.deleted?.at for pageId in missing
+      deletedIds = {}
+      deletedIds[pageId] = Pages.findOne(pageId)?.deleted?.id for pageId in missing
       {pages: newPages} =
         if order?
           planOrderRestore pages, order, missing
@@ -152,11 +159,13 @@ Meteor.methods
       if attempt == restoreAttempts
         throw new Meteor.Error "The pages of room #{roomId} keep changing"
     ## Clear the deletion marker, but only the one these pages were restored
-    ## from: if someone deleted one of them again meanwhile, its new marker
-    ## must stay, so that others are still offered to bring it back.
+    ## from (the one seen when planning, or none): if someone deleted one of
+    ## them again meanwhile, its new marker must stay, so that others are still
+    ## offered to bring it back.
     for pageId in missing
       selector = _id: pageId
-      selector['deleted.at'] = deletedAt[pageId] if deletedAt[pageId]?
+      unless @isSimulation
+        selector['deleted.id'] = deletedIds[pageId] ? $exists: false
       modifier = $unset: deleted: ''
       modifier.$set = restored: token if token?
       Pages.update selector, modifier, channel: "rooms::#{roomId}::pages"

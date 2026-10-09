@@ -11,7 +11,7 @@ import {BBox, minSvgSize} from './BBox'
 import {penArrowAverage, averageDirection} from './Collision'
 #import {DBVT} from './DBVT'
 
-## How long `whenSettled` waits for images and formulas, at most
+## How long `whenSettled` waits for images and formulas, unless told otherwise
 settleTimeout = 3000
 
 export class RenderObjects
@@ -23,6 +23,7 @@ export class RenderObjects
     @texById = {}
     @imagesLoading = new Set  # images that have not loaded (or failed) yet
     @settledWaiters = []
+    @arrivalListeners = []
     @bbox = {}
     @dashOffset = {}
     @arrows = new Set
@@ -30,6 +31,7 @@ export class RenderObjects
   stop: ->
     @stopped = true
     @settledWaiters = []
+    @arrivalListeners = []
     for arrowId from @arrows
       document.getElementById(arrowId)?.remove()
   ## Images and LaTeX formulas show up a little after their objects are
@@ -42,28 +44,40 @@ export class RenderObjects
     for formula, job of @tex when not job.svg?
       return false
     true
-  ## Call `callback` once everything is displayed (at once if it is), or after
-  ## `maxWait` milliseconds if something never shows up (e.g., an image that
-  ## does not load).  Returns a function that cancels the call.
+  ## Call `callback(true)` once everything is displayed (at once if it is), or
+  ## `callback(false)` after `maxWait` milliseconds if something has still not
+  ## shown up (e.g., a formula that is slow, or an image that does not load).
+  ## Without a `maxWait` (`Infinity`) it waits for as long as it takes.
+  ## Returns a function that cancels the call.
   whenSettled: (callback, maxWait = settleTimeout) ->
     if @settled()
-      callback()
+      callback true
       return ->
     timer = null
     cancel = =>
       clearTimeout timer
-      @settledWaiters = (waiter for waiter in @settledWaiters when waiter != finish)
+      @settledWaiters = (w for w in @settledWaiters when w != waiter)
       return
-    finish = ->
+    waiter = (settled) =>
       cancel()
-      callback()
+      callback settled
       return
-    timer = setTimeout finish, maxWait
-    @settledWaiters.push finish
+    timer = setTimeout (-> waiter false), maxWait if isFinite maxWait
+    @settledWaiters.push waiter
     cancel
+  ## Call `callback(settled)` each time an image or a formula has shown up (or
+  ## failed to), where `settled` is whether everything is displayed by now.
+  ## Returns a function that stops the calls.
+  onArrival: (callback) ->
+    @arrivalListeners.push callback
+    =>
+      @arrivalListeners = (l for l in @arrivalListeners when l != callback)
+      return
   settledCheck: ->
-    if @settled()
-      waiter() for waiter in @settledWaiters[..]
+    settled = @settled()
+    if settled
+      waiter true for waiter in @settledWaiters[..]
+    listener settled for listener in @arrivalListeners[..]
     return
   id: (obj) ->
     ###
@@ -579,16 +593,20 @@ export class RenderObjects
     if not options? or options.url or options.proxy or options.credentials
       href = if obj.proxy then proxyUrl obj.url else obj.url
       ## (An image whose address does not change does not load again.)
-      @watchImage image unless image.getAttribute('href') == href
+      @watchImage image, href unless image.getAttribute('href') == href
       dom.attr image,
         href: href
         crossorigin: if obj.credentials then 'use-credentials' else 'anonymous'
     image
-  ## Note that `image` is loading until it has loaded or failed to
-  watchImage: (image) ->
+  ## Note that `image` (which is to show `href`) is loading until it has loaded
+  ## or failed to.  A failed image is replaced by an icon, which has to load, too.
+  watchImage: (image, href) ->
     return if @imagesLoading.has image
     @imagesLoading.add image
-    done = =>
+    done = (e) =>
+      if e.type == 'error' and (now = image.getAttribute 'href') != href
+        href = now  # (see `onerror` in `renderImage`)
+        return
       image.removeEventListener 'load', done
       image.removeEventListener 'error', done
       @imagesLoading.delete image

@@ -12,6 +12,7 @@ import {createTracker} from 'solid-meteor-data'
 import {currentPage, currentRoom, gotoPageId} from './AppState'
 import {defaultGrid, defaultGridType} from './Grid'
 import storage from './lib/storage'
+import {StorageSet} from './lib/storageSet'
 import {validId} from '/lib/id'
 import {planOrderRestore, planRestore} from '/lib/pageOrder'
 
@@ -24,48 +25,20 @@ unless validId browserId
   try
     window.localStorage.setItem 'browserId', browserId
 
-## Some things are remembered by this browser (see ./lib/storage), and every
-## tab of it has its own copy, which is told about changes made by other tabs
-## a moment after they happen.  Anything saved as a whole (a list) must
-## therefore be read afresh right before it is changed, or a tab would write back
-## what it knew before, and undo what another tab just did.
-##
-## Keys of the variables whose last save did not make it to the browser's
-## storage (it may be full or off): for them, the copy in memory is the newest.
-unsaved = new Set
-
-## Bring `variable` up to date with what is saved in this browser.
-refresh = (variable) ->
-  return variable if unsaved.has variable.key
-  try
-    json = window.localStorage.getItem variable.key
-    if json? and json != variable.constructor.stringify variable.get()
-      variable.setTemp variable.constructor.parse json
-  return variable
-
-## Set `variable`, and note whether it could be saved.
-save = (variable, value) ->
-  variable.set value
-  try
-    saved = window.localStorage.getItem(variable.key) ==
-            variable.constructor.stringify value
-  if saved
-    unsaved.delete variable.key
-  else
-    unsaved.add variable.key
-  return
-
 ## Deletions that this browser has already answered about in each room, as a
-## list of deletion times (milliseconds).  It is `null` until the room is first
-## opened in this browser, when nothing counts as new.
+## set of deletion times (milliseconds), saved one by one (see ./lib/storageSet).
+## `seen` is `null` until the room is first opened in this browser, when nothing
+## counts as new.
 acks = {}
 getAck = (roomId) ->
-  acks[roomId] ?= new storage.Variable "#{roomId}.pagesSeen", null
+  acks[roomId] ?=
+    seen: new storage.Variable "#{roomId}.pagesSeen", null
+    times: new StorageSet "#{roomId}.pagesSeen.", Number.isFinite
 addAck = (roomId, times) ->
-  variable = refresh getAck roomId
-  current = variable.get() ? []
-  added = (time for time in times when time? and time not in current)
-  save variable, current.concat added if added.length
+  {times: answered} = getAck roomId
+  answered.load()
+  for time in times when time? and not answered.has "#{time}"
+    answered.put "#{time}", time
   return
 
 deletedPages = (roomId) ->
@@ -159,82 +132,90 @@ export restorePages = (ids) ->
 ## History of this browser's deletions, for Undo Delete and Redo Delete.
 ##
 ## Each deletion is one entry, however many pages it deleted:
-##   {id, kind, ids, order, at}
+##   {id, kind, ids, order, at, state, moved}
 ## where `kind` is 'current', 'left', 'right', or 'all' (the four ways to
 ## delete), `ids` are the pages it deleted, and `order` is the room's page list
 ## right before the deletion, which is how its pages find their way back (see
-## `planOrderRestore`: by their neighbors, never by page number).
+## `planOrderRestore`: by their neighbors, never by page number).  `state` is
+## 'undo' (it can be undone) or 'redo' (it was undone and can be redone), and
+## `moved` is when it got into that state, which orders the entries in each
+## state, oldest first.
 ##
-## The newest `historyLimit` deletions are kept for each room.  They are saved
-## in this browser, so they survive a reload and are shared by its tabs.
+## The newest `historyLimit` entries of each state are kept for each room.  They
+## are saved in this browser, one by one (see ./lib/storageSet), so they survive
+## a reload and are shared by its tabs without ever overwriting each other.
 ## Nothing here is connected to the normal Undo/Redo (Ctrl-Z/Ctrl-Y).
 
 export historyLimit = 40
 kinds = ['current', 'left', 'right', 'all']
-
-histories = {}
-getHistory = (roomId) ->
-  histories[roomId] ?= new storage.Variable "#{roomId}.pageDeletes",
-    undo: []
-    redo: []
+states = ['undo', 'redo']
 
 isStringList = (list) ->
   Array.isArray(list) and list.every (item) -> typeof item == 'string'
-validEntry = (entry) ->
-  entry? and typeof entry.id == 'string' and entry.kind in kinds and
+validEntry = (entry, id) ->
+  entry? and entry.id == id and entry.state in states and
+  Number.isFinite(entry.moved) and entry.kind in kinds and
   isStringList(entry.ids) and entry.ids.length > 0 and
   isStringList(entry.order)
-validEntries = (list) ->
-  return [] unless Array.isArray list
-  entry for entry in list when validEntry entry
+
+histories = {}
+getHistory = (roomId) ->
+  histories[roomId] ?= new StorageSet "#{roomId}.pageDelete.", validEntry
 
 ## The two lists (oldest first), ignoring anything malformed in storage.
-## Before changing the history, read it `fresh` (see `refresh`).
+## Before changing the history, read it `fresh`, to see what other tabs saved.
 readHistory = (roomId, fresh) ->
-  variable = getHistory roomId
-  refresh variable if fresh
-  value = variable.get()
-  undo: validEntries value?.undo
-  redo: validEntries value?.redo
+  history = getHistory roomId
+  history.load() if fresh
+  entries = history.all()
+  ## (entries put at the very same moment by two tabs: by ID, the same in both)
+  byMoved = (a, b) -> a.moved - b.moved or (if a.id < b.id then -1 else 1)
+  undo: (e for e in entries when e.state == 'undo').sort byMoved
+  redo: (e for e in entries when e.state == 'redo').sort byMoved
 
-writeHistory = (roomId, undo, redo) ->
-  save getHistory(roomId),
-    undo: undo[-historyLimit..]
-    redo: redo[-historyLimit..]
+## Save `entry` as the newest one in `state`, and forget the oldest ones
+## beyond the limit.
+putEntry = (roomId, entry, state) ->
+  history = getHistory roomId
+  moved = Math.max Date.now(), 1 + Math.max 0, (e.moved for e in history.all())...
+  history.put entry.id, Object.assign {}, entry, {state, moved}
+  {undo, redo} = readHistory roomId
+  for list in [undo, redo]
+    history.remove e.id for e in list[...-historyLimit]
   return
 
 ## A new deletion: it can be undone, and what could be redone before it can't
 ## be any more.  Those entries are forgotten only once the server accepts the
 ## deletion (see `acceptDeletion`), so a refused deletion leaves them alone.
-## Returns their ids.
+## Returns them, as `{id, moved}`.
 addDeletion = (roomId, entry) ->
-  {undo, redo} = readHistory roomId, true
-  undo.push entry
-  writeHistory roomId, undo, redo
-  (e.id for e in redo)
+  {redo} = readHistory roomId, true
+  putEntry roomId, entry, 'undo'
+  {id: e.id, moved: e.moved} for e in redo
 
-## The server accepted a deletion: forget the redo entries `forgotten`.
+## The server accepted a deletion: forget the redo entries `forgotten`, unless
+## they are not the same by now (e.g., another tab redid one and undid it again,
+## which makes it a newer entry, to be kept).
 acceptDeletion = (roomId, forgotten) ->
-  {undo, redo} = readHistory roomId, true
-  writeHistory roomId, undo, (e for e in redo when e.id not in forgotten)
+  history = getHistory roomId
+  history.load()
+  for {id, moved} in forgotten
+    entry = history.get id
+    history.remove id if entry?.state == 'redo' and entry.moved == moved
   return
 
 ## The server refused a deletion, so there is nothing to undo.
 dropEntry = (roomId, id) ->
-  {undo, redo} = readHistory roomId, true
-  writeHistory roomId,
-    (e for e in undo when e.id != id)
-    (e for e in redo when e.id != id)
+  getHistory(roomId).remove id
   return
 
-## Move entry `id` from list `from` to list `to` (as `replacement`, if given).
+## Move entry `id` from state `from` to state `to` (as `replacement`, if given).
 moveEntry = (roomId, from, to, id, replacement) ->
-  history = readHistory roomId, true
-  entry = history[from].find (e) -> e.id == id
-  return unless entry?
-  history[from] = (e for e in history[from] when e.id != id)
-  history[to].push replacement ? entry
-  writeHistory roomId, history.undo, history.redo
+  history = getHistory roomId
+  history.load()
+  entry = history.get id
+  return unless entry?.state == from
+  putEntry roomId, replacement ? entry, to
   return
 
 ## What Undo Delete would do for `entry`: bring back the pages of the deletion
@@ -397,26 +378,27 @@ export DeletedNotice = ->
   createEffect ->
     return unless loaded()
     roomId = currentRoom().id
-    variable = refresh getAck roomId
-    return if variable.get()?
-    save variable, (
-      for page in deletedPages roomId when page.deleted?.at?
-        page.deleted.at.getTime()
-    )
+    ack = getAck roomId
+    return if ack.seen.get()?
+    ack.times.load()
+    for page in deletedPages roomId when page.deleted?.at?
+      time = page.deleted.at.getTime()
+      ack.times.put "#{time}", time unless ack.times.has "#{time}"
+    ack.seen.set true
 
   ## Deleted pages that this browser has not answered about and did not delete
   info = createTracker ->
     return unless loaded()
     room = currentRoom()
-    ack = getAck(room.id).get()
-    return unless ack?
+    ack = getAck room.id
+    return unless ack.seen.get()?
     pages = room.data().pages
     items = []
     for page in deletedPages room.id
       deleted = page.deleted
       continue if page._id in pages or not deleted?.at?
       time = deleted.at.getTime()
-      continue if time in ack or deleted.by == browserId
+      continue if ack.times.has("#{time}") or deleted.by == browserId
       ## An empty page (e.g., the blank page of Delete All) has no work to bring back
       continue unless Objects.find({page: page._id}, limit: 1).count()
       items.push {id: page._id, time}

@@ -9,6 +9,10 @@ import {RenderObjects} from './RenderObjects'
 import {RenderRemotes} from './RenderRemotes'
 import storage from './lib/storage'
 
+## How long (in milliseconds) a page that was brought back keeps zooming to fit
+## the images and formulas that are slow to show up
+lateFitTime = 60000
+
 noDiff =
   _id: true       # should never change
   type: true      # should never change
@@ -70,26 +74,50 @@ export class Page
   ## Zoom to fit all objects (or reset the view if the page is empty), once
   ## the room has finished loading so that all objects are there, and their
   ## images and LaTeX formulas are displayed so that they are taken into account.
-  ## If the viewer pans or zooms in the meantime, their view stays.
+  ## If something is slow to show up, zoom to fit without it, and again as it
+  ## shows up (for a while).  If the viewer pans or zooms in the meantime, their
+  ## view stays.
   fitRestored: (restored) ->
     @fitAuto?.stop()
     @fitWait?()
     @fitAuto = Tracker.autorun (computation) =>
       return if @stopped or @room.loading()
       computation.stop()
-      {x, y, scale} = @board.transform
-      @fitWait = @render.whenSettled =>
-        @fitWait = null
+      ## The view that this fits from: that of the viewer, until they change it
+      view = @viewOf()
+      ## Zoom to fit what is displayed, unless the viewer changed the view
+      ## (then `false`)
+      fit = =>
+        return false unless @viewOf() == view
+        elts = @board.renderedChildren()
+        if elts.length
+          @board.zoomToFit @board.renderedBBox elts
+        else
+          @board.setTransform defaultTransform()
+        view = @viewOf()
+        true
+      stopLate = timer = null
+      cancel = @render.whenSettled (settled) =>
         return if @stopped
-        t = @board.transform
-        moved = t.x != x or t.y != y or t.scale != scale
-        unless moved
-          elts = @board.renderedChildren()
-          if elts.length
-            @board.zoomToFit @board.renderedBBox elts
-          else
-            @board.setTransform defaultTransform()
+        fit()
         @restoredSeen.set restored
+        return if settled
+        stopLate = @render.onArrival (settled) =>
+          unless fit() and not settled
+            stopLate()
+            clearTimeout timer
+          return
+        timer = setTimeout stopLate, lateFitTime
+        return
+      @fitWait = ->
+        cancel()
+        stopLate?()
+        clearTimeout timer
+        return
+  ## The current view, as something that can be compared with `==`
+  viewOf: ->
+    {x, y, scale} = @board.transform
+    "#{x} #{y} #{scale}"
   observeObjects: ->
     @board.render = @render = new RenderObjects @board
     #dbvt_svg = dom.create 'g'
