@@ -141,7 +141,6 @@ deleteChoices = ->
     kind: 'all'
     label: 'Delete All Pages'
     ids: pages
-    blank: true  # leave a new blank page
     ask:
       if n == 1
         "Delete Page 1 and leave a blank page?"
@@ -291,7 +290,7 @@ DeleteOverlays = ->
         text: "#{choice.ask} You can reverse this with Undo Delete."
         label: 'Delete'
         danger: true
-        run: -> deletePages choice.ids, blank: choice.blank, kind: choice.kind
+        run: -> deletePages choice.ids, kind: choice.kind
       when 'undo'
         return nothingToDo unless (info = hist().undo)?
         text: info.ask

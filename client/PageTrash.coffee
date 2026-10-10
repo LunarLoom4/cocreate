@@ -1,10 +1,10 @@
 ## Deleting pages is reversible.  Pages are only taken out of the room's page
-## list and marked `deleted` (see /lib/pages.coffee); their objects and history
-## stay in the database.  This module deletes pages, runs the Undo Delete and
-## Redo Delete buttons (which are separate from the normal Undo/Redo) on the
-## room's history of deletions, which is the same for everyone in the room and
-## is kept on the server (`PageDeletions`, see /lib/pageHistory.coffee), and
-## shows the prompt offering to bring back pages that someone else deleted.
+## list; their objects and history stay in the database.  This module deletes
+## pages, runs the Undo Delete and Redo Delete buttons (which are separate from
+## the normal Undo/Redo) on the room's history of deletions, which is the same
+## for everyone in the room and is kept on the server (see /lib/pages.coffee and
+## /lib/pageHistory.coffee), and shows the prompt offering to bring back pages
+## that someone else deleted.
 
 import {createEffect, createRoot, Show} from 'solid-js'
 import {Random} from 'meteor/random'
@@ -15,7 +15,7 @@ import {defaultGrid, defaultGridType} from './Grid'
 import storage from './lib/storage'
 import {StorageSet} from './lib/storageSet'
 import {validId} from '/lib/id'
-import {deletionKinds, historyChoices, noticeFor, noticeText} from '/lib/pageHistory'
+import {deletionKinds, historyChoices, noticeFor, noticeText, topOf} from '/lib/pageHistory'
 
 ## Identifies this browser (all its tabs), to not ask it about its own deletions
 browserId = null
@@ -42,7 +42,7 @@ addAnswered = (roomId, deletionIds) ->
     answered.put id, id
   return
 
-## The history of the room's deletions, for everyone.  Reactive.
+## The deletions of the room that the history may refer to.  Reactive.
 deletionsOf = (roomId) ->
   PageDeletions.find(room: roomId).fetch()
 
@@ -79,10 +79,18 @@ replacementFor = (ids) ->
     return page
   return
 
+## What a new blank page is made like: like the current page
+blankOptions = ->
+  data = currentPage()?.data()
+  grid: data?.grid ? defaultGrid
+  gridType: data?.gridType ? defaultGridType
+
 ## Delete `ids` from the room, after going to `target` (if any), so that the
 ## page being viewed never disappears from under the viewer.  The server adds
 ## the deletion to the room's history.  `kind` is which of the four ways to
-## delete this is, and `redoOf` the deletion that is being redone, if any.
+## delete this is, and `redoOf` the deletion that is being redone, if any.  If
+## this deletes every page, the server leaves a new blank page (made like the
+## current page) and it is shown.
 removePages = (ids, target, kind, redoOf) ->
   room = currentRoom()
   return unless room?
@@ -90,30 +98,19 @@ removePages = (ids, target, kind, redoOf) ->
     order = room.data()?.pages ? []
     present = (id for id in order when id in ids)
     return unless present.length
-    args = [present, browserId, kind]
-    args.push redoOf if redoOf?
-    Meteor.apply 'pagesDel', args, (error) ->
+    options = {blank: blankOptions()}
+    options.redoOf = redoOf if redoOf?
+    blankId = Meteor.apply 'pagesDel', [present, browserId, kind, options],
+      returnStubValue: true
+    , (error) ->
       if error?
         console.error "Failed to delete pages on server: #{error}"
+    gotoPageId blankId if blankId
   if target?
     gotoThen target, run
   else
     run()
   return
-
-## A new blank page at the end, like the current page, in which to land when
-## every page is deleted.  Returns its ID.
-makeBlank = (room) ->
-  data = currentPage()?.data()
-  Meteor.apply 'pageNew', [
-    room: room.id
-    grid: data?.grid ? defaultGrid
-    gridType: data?.gridType ? defaultGridType
-  ],
-    returnStubValue: true
-  , (error) ->
-    if error?
-      console.error "Failed to create new page on server: #{error}"
 
 ## Undo deletions, for everyone: bring back their pages that are not in the room
 ## (see `pagesRestore`).
@@ -130,46 +127,37 @@ export historyInfo = ->
   room = currentRoom()
   pages = room?.data()?.pages
   return {} unless room? and pages?
-  historyChoices deletionsOf(room.id), pages
+  historyChoices room.data(), deletionsOf(room.id), pages
 
-## Delete pages.  `kind` is which of the four choices this is.  With `blank`,
-## first make a blank page, like the current page, so the room is left with it.
-## The deletion is added to the room's history for Undo Delete.
-export deletePages = (ids, {blank, kind} = {}) ->
-  room = currentRoom()
-  return unless room?
-  if blank
-    target = makeBlank room
-    return unless target?
-  else
-    target = replacementFor ids
-  removePages ids, target, (if kind in deletionKinds then kind else 'current')
+## Delete pages.  `kind` is which of the four choices this is.  If this deletes
+## every page, the room is left with a new blank page.  The deletion is added to
+## the room's history for Undo Delete.
+export deletePages = (ids, {kind} = {}) ->
+  return unless currentRoom()?
+  removePages ids, replacementFor(ids), (if kind in deletionKinds then kind else 'current')
   return
 
 ## Undo Delete, for the deletion that was asked about: bring back its pages that
 ## are missing, next to their old neighbors.  Never deletes any page, and the
-## page being viewed stays open.
+## page being viewed stays open.  Does nothing if it is not the latest deletion
+## that can be undone any more.
 export undoDelete = (id) ->
   return unless currentRoom()?
   undoDeletions [id]
 
 ## Redo Delete, for the deletion that was asked about: delete its pages that are
 ## in the room (never any page added since).  The page being viewed stays open,
-## unless it is deleted, when its replacement is shown.
+## unless it is deleted, when its replacement is shown.  Does nothing if it is
+## not the deletion undone last any more.
 export redoDelete = (id) ->
   room = currentRoom()
   return unless room?
   deletion = PageDeletions.findOne id
-  return unless deletion?.state == 'redo' and deletion.room == room.id
+  return unless deletion?.room == room.id and topOf(room.data()?.redo) == id
   pages = room.data()?.pages ? []
   ids = (pageId for pageId in deletion.ids when pageId in pages)
   return unless ids.length
-  if ids.length == pages.length  # that is every page: leave a blank one
-    target = makeBlank room
-    return unless target?
-  else
-    target = replacementFor ids
-  removePages ids, target, deletion.kind, deletion._id
+  removePages ids, replacementFor(ids), deletion.kind, deletion._id
   return
 
 ## Offer to bring back the pages of the latest deletion of the room, when
@@ -190,8 +178,11 @@ export DeletedNotice = ->
     ack = getAck roomId
     return if ack.seen.get()?
     ack.answered.load()
-    for deletion in deletionsOf roomId when not ack.answered.has deletion._id
-      ack.answered.put deletion._id, deletion._id
+    ids = (deletion._id for deletion in deletionsOf roomId)
+    latest = currentRoom().data().latest
+    ids.push latest if latest? and latest not in ids
+    for id in ids when not ack.answered.has id
+      ack.answered.put id, id
     ack.seen.set true
 
   ## The latest deletion of the room, if this browser did not make it and has
@@ -201,7 +192,7 @@ export DeletedNotice = ->
     room = currentRoom()
     ack = getAck room.id
     return unless ack.seen.get()?
-    notice = noticeFor deletionsOf(room.id), room.data().pages,
+    notice = noticeFor room.data(), deletionsOf(room.id), room.data().pages,
       browserId: browserId
       answered: (id) -> ack.answered.has id
     return unless notice?

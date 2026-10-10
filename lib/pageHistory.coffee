@@ -3,31 +3,24 @@
 ## Nothing here touches the database or the screen, so it can run (and be
 ## tested) anywhere.
 ##
-## The history is the same for everyone in the room: the `PageDeletions` of
-## /lib/pages.coffee, kept on the server.  Each deletion is one document,
+## The history is the same for everyone in the room and is kept on the server
+## (see /lib/pages.coffee).  The room itself holds two stacks of deletion IDs,
+## `undo` (deletions that can be undone, the latest last) and `redo` (deletions
+## that were undone, the one undone last at the end), and `latest`, the ID of
+## the latest deletion made.  Each deletion is one document of `PageDeletions`,
 ## however many pages it deleted:
-##   {_id, room, kind, ids, order, by, at, state, seq, moved}
+##   {_id, room, kind, ids, order, by, at}
 ## where `kind` is 'current', 'left', 'right', or 'all' (the four ways to
 ## delete), `ids` are the pages it deleted, and `order` is the room's page list
 ## right before it, which is how its pages find their way back (see
 ## `planOrderRestore`: by their neighbors, never by page number).  `by` is the
-## browser that made it.  `state` is 'undo' (it can be undone) or 'redo' (it was
-## undone and can be redone).  `seq` is the number the deletion took from the
-## room when its pages left the room, and `moved` is the number the room gave it
-## when it got into its state (`seq` at first).  The numbers are unique in the
-## room and grow in the order things happened, which orders the deletions in
-## each state, oldest first.
+## browser that made it.  A deletion never changes once it is in a stack.
 
 import {planOrderRestore} from './pageOrder'
 
-## How many deletions are kept in each state, in each room
+## How many deletions are kept in each stack, in each room
 export historyLimit = 40
 export deletionKinds = ['current', 'left', 'right', 'all']
-
-## Oldest first: by when they got into their state.  (The numbers are unique,
-## so the ID only matters for records made by hand.)
-export byMoved = (a, b) ->
-  a.moved - b.moved or (if a._id < b._id then -1 else if a._id > b._id then 1 else 0)
 
 ## "5", "5 and 8", "1 to 4, 8 and 10"
 export listPages = (numbers) ->
@@ -54,6 +47,10 @@ export pagesLabel = (numbers) ->
   else
     "Pages #{listPages numbers}"
 
+## The ID at the end of a stack, if there is one
+export topOf = (stack) ->
+  stack?[stack.length - 1]
+
 ## What Undo Delete would do for `deletion`: bring back the pages of the deletion
 ## that are not in the room now, and the numbers they will have.  `undefined`
 ## if all of them are back already.
@@ -67,7 +64,7 @@ export undoPlan = (deletion, pages) ->
 
 ## What Redo Delete would do for `deletion`: delete its pages that are in the
 ## room.  `blank` is whether that would leave no page at all, so that a blank
-## page gets added first.
+## page gets added.
 export redoPlan = (deletion, pages) ->
   present = (id for id in deletion.ids when id in pages)
   return unless present.length
@@ -92,39 +89,38 @@ export redoAsk = ({deletion, present, numbers, blank}) ->
 
 ## What the Undo Delete and Redo Delete buttons would do right now, as
 ## `{undo, redo}`, each `{id, ask}` (the deletion and the question to ask) or
-## missing if there is nothing to do.  The newest deletion that still has
-## something to do is used.
-export historyChoices = (deletions, pages) ->
+## missing if there is nothing to do.  Undo Delete is always for the latest
+## deletion that has not been undone, and Redo Delete for the one undone last:
+## `room` is the room's document, `deletions` the room's `PageDeletions`, and
+## `pages` its list of pages.
+export historyChoices = (room, deletions, pages) ->
   choices = {}
-  undo = (d for d in deletions when d.state == 'undo').sort byMoved
-  redo = (d for d in deletions when d.state == 'redo').sort byMoved
-  for deletion in undo by -1 when (plan = undoPlan deletion, pages)?
+  find = (id) -> deletions.find (deletion) -> deletion._id == id
+  if (deletion = find topOf room?.undo)? and (plan = undoPlan deletion, pages)?
     choices.undo = {id: deletion._id, ask: undoAsk plan}
-    break
-  for deletion in redo by -1 when (plan = redoPlan deletion, pages)?
+  if (deletion = find topOf room?.redo)? and (plan = redoPlan deletion, pages)?
     choices.redo = {id: deletion._id, ask: redoAsk plan}
-    break
   choices
 
 ## The deletion to ask about, if any: only the latest deletion of the room is
-## ever asked about, and only if another browser made it (`browserId` is this
-## one), it can still be undone, this browser has not answered about it
+## ever asked about, and only if it has not been undone, another browser made it
+## (`browserId` is this one), this browser has not answered about it
 ## (`answered(id)`), and some of its pages are not in the room.  When another
 ## deletion comes, the question about the one before it is gone for good, as if
 ## answered No (a deletion that was undone, or one made by this browser, ends
 ## the question the same way).  Returns its ID in a list, and the numbers that
 ## its pages will have once they are back.
-export noticeFor = (deletions, pages, {browserId, answered}) ->
-  latest = null
-  for deletion in deletions when not latest? or deletion.seq > latest.seq
-    latest = deletion
-  return unless latest? and latest.state == 'undo' and latest.by != browserId
-  return if answered latest._id
+export noticeFor = (room, deletions, pages, {browserId, answered}) ->
+  latestId = room?.latest
+  return unless latestId? and topOf(room.undo) == latestId
+  latest = deletions.find (deletion) -> deletion._id == latestId
+  return unless latest? and latest.by != browserId
+  return if answered latestId
   missing = (id for id in latest.ids when id not in pages)
   return unless missing.length
   placed = planOrderRestore(pages, latest.order, missing).pages
   numbers = (placed.indexOf(id) + 1 for id in missing).sort (a, b) -> a - b
-  {ids: [latest._id], numbers}
+  {ids: [latestId], numbers}
 
 export noticeText = (numbers) ->
   if numbers.length == 1

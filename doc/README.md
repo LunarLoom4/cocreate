@@ -864,10 +864,15 @@ You can bring them back in two ways:
     (even **Delete All Pages**): its pages leave the room together, come back
     together with one Undo Delete (or one **Yes**), and are deleted together
     again by one Redo Delete.
-    Undo Delete goes back one step at a time,
-    and Redo Delete forward again, until someone deletes something new.
-    Deletions made at almost the same moment go into the history in the
-    order their pages left the room, and Undo Delete takes the latest first.
+  * The steps always go in order.  Undo Delete takes the latest deletion that
+    has not been undone, and Redo Delete the deletion that was undone last;
+    a new deletion by anyone ends what could be redone.
+    Every change to a room's pages is applied one after another, however many
+    people are deleting, undoing, redoing, adding, and duplicating pages at the
+    same moment, so everyone ends up with the same pages in the same order.
+    If a button is pressed for a step that someone else has just taken (they
+    undid or redid it, or deleted something new), nothing happens, and the menu
+    shows what is now the latest step.
     The last 40 deletions in the room are kept on the server (and the last
     40 that were undone, for Redo Delete).
   * Undo Delete only brings pages back; it never deletes any page, including
@@ -883,6 +888,9 @@ You can bring them back in two ways:
     page, which is now the last page.
   * A button is disabled when there is nothing for it to do, for example
     when someone else already brought the pages back.
+  * **Delete All Pages**, and a Redo Delete that would delete every page left
+    in the room, add one new blank page in the same step, so the room is never
+    without a page, and never gets two blank pages when two people do it at once.
 * Everyone else in the room is asked about the latest deletion, either right
   away (if the room is open) or when they next open the room:
   "Pages 5 and 8 to 10 were deleted. Bring them back?"
