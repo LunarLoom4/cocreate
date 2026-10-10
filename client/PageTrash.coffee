@@ -98,7 +98,8 @@ removePages = (ids, target, kind, redoOf) ->
     order = room.data()?.pages ? []
     present = (id for id in order when id in ids)
     return unless present.length
-    options = {blank: blankOptions()}
+    ## The ID of a new blank page is made here, so that the page shown at once is the page the server saves
+    options = {blank: Object.assign {id: Random.id()}, blankOptions()}
     options.redoOf = redoOf if redoOf?
     blankId = Meteor.apply 'pagesDel', [present, browserId, kind, options],
       returnStubValue: true

@@ -36,7 +36,9 @@ everyone in a room.  The rules, which everything below follows:
 * Undoing or redoing names the deletion it is for.  If that deletion is not the
   one at the end of its stack when the update happens (someone else changed
   the history after the person looked at it), nothing happens.
-* Deleting every page of a room adds one blank page, in the same update.
+* Deleting every page of a room adds one blank page, in the same update.  The
+  caller says what ID the page gets, so that the page it shows at once is the
+  page that is saved.
 ###
 
 @PageDeletions = new Mongo.Collection 'pageDeletions'
@@ -76,6 +78,16 @@ forgetDeletions = (roomId, ids) ->
     console.error "Could not forget deletions #{ids} of room #{roomId}: #{error}"
   return
 
+## The document of a new blank page: `blank` is what the caller sent (the ID the
+## page gets, and whether it has a grid and which kind), `fields` is the rest.
+## The ID is the caller's, not made here, so that the page that the caller shows
+## right away is the page that gets saved.
+blankPage = (roomId, blank, fields) ->
+  page = Object.assign {_id: blank.id, room: roomId}, fields
+  page.grid = blank.grid if blank.grid?
+  page.gridType = blank.gridType if blank.gridType?
+  page
+
 ## Make the one update of a change to the room.  Returns whether it applied
 ## (it does not if someone changed the room first).  If the update fails with an
 ## error, it may have been applied just before the error: the room shows it, by
@@ -95,10 +107,10 @@ updateRoom = (roomId, selector, changes, shows) ->
 
 ## Delete pages from a room, either the `requested` ones or, for redoing the
 ## deletion `redoOf`, the pages of that deletion that are in the room.  This is
-## the one update described at the top.  `ids` are the IDs the new deletion and
-## the new blank page (if the room needs one) get.  Returns the ID of the blank
-## page if one was added.
-deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, ids) ->
+## the one update described at the top.  `recordId` is the ID the new deletion
+## gets, and `blank` is what the new blank page (if the room needs one) is made
+## from, with its ID.  Returns the ID of the blank page if one was added.
+deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
   at = new Date
   wroteRecord = wroteBlank = committed = unsure = false
   try
@@ -126,7 +138,7 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, ids) ->
       deleting = new Set pageIds
       newPages =
         if addBlank
-          [ids.blank]
+          [blank.id]
         else
           (pageId for pageId in pages when not deleting.has pageId)
       ## The deletion first, then the room refers to it.  A blank page also
@@ -135,34 +147,34 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, ids) ->
         room: roomId
         kind: kind ? 'current'
         ids: pageIds
-        order: if addBlank then pages.concat [ids.blank] else pages
+        order: if addBlank then pages.concat [blank.id] else pages
         at: at
       record.by = remoteId if remoteId?
       if wroteRecord
-        PageDeletions.update ids.record, {$set: record},
+        PageDeletions.update recordId, {$set: record},
           channel: deletionsChannel roomId
       else
-        PageDeletions.insert Object.assign({_id: ids.record}, record),
+        PageDeletions.insert Object.assign({_id: recordId}, record),
           channel: deletionsChannel roomId
         wroteRecord = true
       if addBlank and not wroteBlank
-        Pages.insert Object.assign({_id: ids.blank, room: roomId, created: at}, blank),
+        Pages.insert blankPage(roomId, blank, created: at),
           channel: pagesChannel roomId
         wroteBlank = true
       else if wroteBlank and not addBlank
-        Pages.remove ids.blank, channel: pagesChannel roomId
+        Pages.remove blank.id, channel: pagesChannel roomId
         wroteBlank = false
       changes =
-        $set: {pages: newPages, latest: ids.record}
+        $set: {pages: newPages, latest: recordId}
         $inc: {rev: 1}
-        $push: {undo: {$each: [ids.record], $slice: -historyLimit}}
+        $push: {undo: {$each: [recordId], $slice: -historyLimit}}
       if redoOf?
         changes.$pop = {redo: 1}
       else
         changes.$set.redo = []  # a new deletion ends what could be redone
       try
         committed = updateRoom roomId, unchanged(room), changes, (current) ->
-          ids.record in (current.undo ? []) or ids.record in (current.redo ? [])
+          recordId in (current.undo ? []) or recordId in (current.redo ? [])
       catch error
         unsure = true if error.unsure
         throw error
@@ -174,12 +186,12 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, ids) ->
     ## Nothing was deleted: the deletion and the page were never used
     unless committed or unsure
       if wroteRecord
-        forgetDeletions roomId, [ids.record]
+        forgetDeletions roomId, [recordId]
       if wroteBlank
         try
-          Pages.remove ids.blank, channel: pagesChannel roomId
+          Pages.remove blank.id, channel: pagesChannel roomId
         catch error
-          console.error "Could not remove the unused page #{ids.blank}: #{error}"
+          console.error "Could not remove the unused page #{blank.id}: #{error}"
   ## The deletions that the room no longer refers to
   dropped = if redoOf? then [redoOf] else redo
   overflow = undo.length + 1 - historyLimit
@@ -193,10 +205,10 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, ids) ->
     , channel: "rooms::#{roomId}::remotes"
   catch error
     console.error "Could not clear the cursors of room #{roomId}: #{error}"
-  ids.blank if addBlank
+  blank.id if addBlank
 
 ## What the client shows right away for `deleteStep`, before the server answers
-deleteStub = (roomId, requested, redoOf, blank, ids) ->
+deleteStub = (roomId, requested, redoOf, blank) ->
   room = Rooms.findOne roomId
   return unless room?
   pages = room.pages ? []
@@ -209,10 +221,10 @@ deleteStub = (roomId, requested, redoOf, blank, ids) ->
   return unless pageIds.length
   if pageIds.length == pages.length
     return unless blank?
-    Pages.insert Object.assign({_id: ids.blank, room: roomId}, blank),
+    Pages.insert blankPage(roomId, blank, {}),
       channel: pagesChannel roomId
-    Rooms.update roomId, $set: pages: [ids.blank]
-    return ids.blank
+    Rooms.update roomId, $set: pages: [blank.id]
+    return blank.id
   deleting = new Set pageIds
   Rooms.update roomId, $set: pages: (pageId for pageId in pages when not deleting.has pageId)
   return
@@ -258,8 +270,10 @@ undoStep = (id, token, isSimulation) ->
 
 validKind = (kind) -> kind in deletionKinds
 
-## What a page needs to know to be created blank
+## What a new blank page needs: the ID it gets (made by the caller, see
+## `blankPage`), and how it looks
 blankPattern =
+  id: Match.Where validId
   grid: Match.Optional Boolean
   gridType: Match.Optional Match.Where validGridType
 
@@ -315,7 +329,8 @@ Meteor.methods
   ## were.  `kind` is which of the four ways to delete this is.  `options` can
   ## have `redoOf`, the deletion being redone (it must be the latest one that was
   ## undone; then `pageIds` is not used but its pages are deleted), and `blank`,
-  ## what a new blank page needs if deleting leaves the room with no page.
+  ## what a new blank page needs (its `id`, and how it looks) if deleting leaves
+  ## the room with no page.
   ## Returns the ID of the blank page, if one was added.
   pagesDel: (pageIds, remoteId, kind, options = {}) ->
     check pageIds, [String]
@@ -328,13 +343,16 @@ Meteor.methods
     for pageId in requested
       unless checkPage(pageId).room == roomId
         throw new Meteor.Error "Page #{pageId} is not in room #{roomId}"
-    ## (The same IDs on the client and the server, for pages the client shows
-    ## right away.)
-    ids = {record: Random.id(), blank: Random.id()}
+    ## The blank page's ID comes from the caller (`options.blank.id`), because an
+    ## ID made here would differ between the client's run of this method and the
+    ## server's (`Random.id()` is not shared between them), and then what the
+    ## person draws on the page right away would be rejected by the server.
+    ## The deletion's ID is made by the server alone, which is the only one to
+    ## save it.
     if @isSimulation
-      deleteStub roomId, requested, options.redoOf, options.blank, ids
+      deleteStub roomId, requested, options.redoOf, options.blank
     else
-      deleteStep roomId, requested, remoteId, kind, options.redoOf, options.blank, ids
+      deleteStep roomId, requested, remoteId, kind, options.redoOf, options.blank, Random.id()
 
   ## Undo deletions (`PageDeletions` of one room, which anyone in the room can
   ## do): put back their pages that are not in the room, next to the pages that
