@@ -63,8 +63,9 @@ defineTool
 
 ## Delete Pages tool: a dropdown menu below the button, then a confirmation
 ## dialog in the middle of the screen.  The menu has the four ways to delete,
-## and Undo Delete and Redo Delete for this browser's history of deletions
-## (see ../PageTrash.coffee), which are separate from the normal Undo/Redo.
+## and Undo Delete and Redo Delete for the room's history of deletions, which
+## everyone in the room shares (see ../PageTrash.coffee), and which are separate
+## from the normal Undo/Redo.
 
 [menu, setMenu] = createSignal null     # {left, top} while dropdown is open
 [pending, setPending] = createSignal null  # what awaits confirmation:

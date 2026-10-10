@@ -42,8 +42,8 @@ Features marked with <sup>★</sup> are rare among shared whiteboard tools.
 * **Multiple pages**<sup>★</sup>
   * **Page duplication**<sup>★</sup> (for separating ideas/alternatives,
     animation, and efficiency)
-  * **Page deletion** (current, left, right, or all pages), which can be
-    reversed with Undo Delete and Redo Delete
+  * **Page deletion** (current, left, right, or all pages), which anyone in
+    the room can reverse with Undo Delete and Redo Delete
   * Can link to specific pages<sup>★</sup>
   * **Grid** backgrounds: **Square** and **triangular**<sup>★</sup>
     with optional **grid snapping**<sup>★</sup> and

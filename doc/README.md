@@ -850,18 +850,26 @@ the page list, along with everything drawn on them and their history of changes.
 You can bring them back in two ways:
 
 * The **Undo Delete** and **Redo Delete** buttons, below the four choices
-  in the same dropdown menu.  **Undo Delete** brings back the pages of your
-  most recent deletion, for everyone in the room, and **Redo Delete** deletes
-  them again.  Each asks for confirmation first, saying which pages it will
-  bring back or delete.  These two buttons are separate from the normal
-  [Undo and Redo](#-undo---redo) (and have no keyboard shortcuts):
+  in the same dropdown menu.  **Undo Delete** brings back the pages of the
+  most recent deletion in the room, whoever made it, for everyone in the
+  room, and **Redo Delete** deletes them again.  Each asks for confirmation
+  first, saying which pages it will bring back or delete.  These two buttons
+  are separate from the normal [Undo and Redo](#-undo---redo)
+  (and have no keyboard shortcuts):
   <kbd>Ctrl</kbd>-<kbd>Z</kbd>, <kbd>Ctrl</kbd>-<kbd>Y</kbd>, and the
   Undo and Redo buttons never bring back or delete pages.
-  * Each deletion is one step, no matter how many pages it deleted
-    (even **Delete All Pages**).  Undo Delete goes back one step at a time,
-    and Redo Delete forward again, until you delete something new.
-    The last 40 deletions in each room are kept, in your browser (so they
-    survive reloading, and your tabs share them).
+  * There is one history of deletions for the whole room, shared by everyone
+    in it, including people who join later.  Anyone can undo or redo anyone's
+    deletion.  Each deletion is one step, no matter how many pages it deleted
+    (even **Delete All Pages**): its pages leave the room together, come back
+    together with one Undo Delete (or one **Yes**), and are deleted together
+    again by one Redo Delete.
+    Undo Delete goes back one step at a time,
+    and Redo Delete forward again, until someone deletes something new.
+    Deletions made at almost the same moment go into the history in the
+    order their pages left the room, and Undo Delete takes the latest first.
+    The last 40 deletions in the room are kept on the server (and the last
+    40 that were undone, for Redo Delete).
   * Undo Delete only brings pages back; it never deletes any page, including
     pages you or others added since.  Pages come back next to the pages that
     were their neighbors, not at their old page numbers: each page returns
@@ -875,15 +883,20 @@ You can bring them back in two ways:
     page, which is now the last page.
   * A button is disabled when there is nothing for it to do, for example
     when someone else already brought the pages back.
-* Everyone else in the room is asked, either right away (if the room is open)
-  or when they next open the room:
+* Everyone else in the room is asked about the latest deletion, either right
+  away (if the room is open) or when they next open the room:
   "Pages 5 and 8 to 10 were deleted. Bring them back?"
-  If anyone answers **Yes**, the pages come back for everyone.
-  **No** only hides the question for you, in that browser.
-  This question is separate from Undo Delete and Redo Delete, and neither
-  affects the other.
-  (Pages that were empty are not asked about, and the first time you open
-  a room in a browser, you're not asked about earlier deletions.)
+  The page numbers are the ones the pages will have once they are back.
+  Only the latest deletion in the room is ever asked about: when someone
+  deletes again, the new question replaces the old one, which counts as an
+  answer of **No**, and a deletion of your own ends the question as well.
+  The question stays until you answer it, however long that takes.
+  **Yes** brings that deletion back for everyone, like Undo Delete does (so it
+  can be redone with Redo Delete), and the question goes away for everyone.
+  **No** only hides the question for you, in that browser: the deletion stays
+  in the room's history, and Undo Delete still brings it back.
+  (The first time you open a room in a browser, you're not asked about
+  earlier deletions, but you can still undo them with Undo Delete.)
 
 A page that is brought back opens zoomed to fit its objects
 the first time you go to it, once its images and formulas have appeared

@@ -14,11 +14,14 @@ instead of version numbers.
   for everyone in the room.  Each choice asks for confirmation.
 * Deleting pages is reversible, and no data is removed.
   The same dropdown has **Undo Delete** and **Redo Delete** buttons, separate
-  from the normal Undo/Redo, which bring back the pages of your last deletions
-  (up to 40 per room) next to their old neighbors, and delete them again.
+  from the normal Undo/Redo, which bring back the pages of the room's last
+  deletions (up to 40, one history shared by everyone in the room, kept on the
+  server) next to their old neighbors, and delete them again.
+  Anyone in the room can undo or redo anyone's deletion.
   You stay on the page you are viewing, unless Redo Delete deletes it.
-  Everyone else in the room is asked whether to bring deleted pages back,
-  live and when they next open the room.
+  Everyone else in the room is asked whether to bring the latest deletion back,
+  live and when they next open the room, with the page numbers they will have.
+  A newer deletion replaces the question.
   Pages that are brought back open zoomed to fit.
 
 ## 2026-05-22

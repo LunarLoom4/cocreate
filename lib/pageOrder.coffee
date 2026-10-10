@@ -2,46 +2,6 @@
 ## This file has no imports, so it can run (and be tested) anywhere.
 
 ###
-`pages` is the room's current list of page IDs, and `ids` are the deleted
-pages to restore.  `prevOf(id)` is the page that came right before `id` when
-it was deleted, or a falsy value if `id` was the first page.
-
-Each page goes right after the nearest of its former predecessors that is
-in the list, or to the front if there is none.  Pages restored together
-keep their original order.
-
-Returns the new list of pages, and the insertions that produce it as
-`{id, pos}` steps to apply in order (`pos` is the index to insert at).
-###
-export planRestore = (pages, ids, prevOf) ->
-  result = pages[..]
-  steps = []
-  wanted = new Set ids
-  placing = new Set
-  place = (id) ->
-    return if id in result or placing.has id
-    placing.add id
-    anchor = prevOf id
-    visited = new Set
-    while anchor and anchor not in result and not visited.has anchor
-      visited.add anchor
-      ## A predecessor that is restored too has to be placed first.
-      place anchor if wanted.has(anchor) and not placing.has anchor
-      break if anchor in result
-      ## Otherwise it stays deleted: keep looking further back.
-      anchor = prevOf anchor
-    pos =
-      if anchor and anchor in result
-        result.indexOf(anchor) + 1
-      else
-        0
-    result.splice pos, 0, id
-    steps.push {id, pos}
-    return
-  place id for id in ids
-  {pages: result, steps}
-
-###
 Where pages go back when a deletion is undone.  `pages` is the room's current
 list of page IDs, `order` is the room's list right before that deletion, and
 `ids` are the pages that deletion removed.  Pages are never identified by
@@ -56,7 +16,8 @@ Each missing page goes
 3. at the end.
 
 Pages in `ids` that are in the list already are skipped, and no page is
-ever removed.  Returns the new list and the insertions, like `planRestore`.
+ever removed.  Returns the new list of pages, and the insertions that produce
+it as `{id, pos}` steps to apply in order (`pos` is the index to insert at).
 ###
 export planOrderRestore = (pages, order, ids) ->
   result = pages[..]
