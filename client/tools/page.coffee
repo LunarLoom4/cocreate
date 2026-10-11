@@ -115,7 +115,7 @@ deleteChoices = ->
   locked = lockedPages data
   n = pages.length
   choice = (fields) ->
-    plan = deletePlan fields.kind, fields.ids, pages, locked
+    plan = deletePlan fields.ids, pages, locked
     Object.assign fields,
       deletable: plan.deletable
       ask: plan.ask
@@ -124,8 +124,6 @@ deleteChoices = ->
       kind: 'current'
       label: 'Delete Current Page'
       ids: [pages[index]]
-      disabled: n <= 1
-      note: "This is the only page. Can't be deleted."
   ,
     choice
       kind: 'left'

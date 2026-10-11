@@ -841,9 +841,12 @@ deletes some of them), the dialog updates to say what it will really do,
 or says that there is nothing left to do.
 Anyone who was viewing a deleted page moves to the next page after it that
 is still there, or to the nearest page before it if there is none.
-Choices that have nothing to delete are disabled, and the only page
-cannot be deleted by itself.  **Delete All Pages** leaves one new blank page,
-and you move to it.
+Choices that have nothing to delete are disabled (there are no pages to the
+left of the first page, for example), but **Delete Current Page** and
+**Delete All Pages** are always available.  Deleting every page of the room
+leaves one new blank page, and you move to it: that is what **Delete All
+Pages** does, and so does **Delete Current Page** when the current page is the
+only page ("Delete Page 1 and leave a blank page?").
 [Locked pages](#lock-page) are never deleted: the other pages of the choice
 are, and the dialog says which pages stay.
 
@@ -892,10 +895,13 @@ You can bring them back in two ways:
     page, which is now the last page.
   * A button is disabled when there is nothing for it to do, for example
     when someone else already brought the pages back.
-  * **Delete All Pages**, and a Redo Delete that would delete every page left
-    in the room, add one new blank page in the same step, so the room is never
-    without a page, and never gets two blank pages when two people do it at once.
-    (If locked pages stay, the room still has pages, so no blank page is added.)
+  * Any deletion that deletes every page of the room (**Delete All Pages**,
+    **Delete Current Page** on the only page, and a Redo Delete that would delete
+    every page left in the room) adds one new blank page in the same step, so the
+    room is never without a page, and never gets two blank pages when two people
+    do it at once.  (If locked pages stay, the room still has pages, so no blank
+    page is added.)  Undo Delete of such a deletion brings the old pages back in
+    front of the blank page, which stays.
 * Everyone else in the room is asked about the latest deletion, either right
   away (if the room is open) or when they next open the room:
   "Pages 5 and 8 to 10 were deleted. Bring them back?"
@@ -903,11 +909,19 @@ You can bring them back in two ways:
   Only the latest deletion in the room is ever asked about: when someone
   deletes again, the new question replaces the old one, which counts as an
   answer of **No**, and a deletion of your own ends the question as well.
-  The question stays until you answer it, however long that takes.
   **Yes** brings that deletion back for everyone, like Undo Delete does (so it
   can be redone with Redo Delete), and the question goes away for everyone.
   **No** only hides the question for you, in that browser: the deletion stays
   in the room's history, and Undo Delete still brings it back.
+  The question also closes, and counts as **No**, in any of these ways:
+  press the cross in its top right corner, press anywhere outside the
+  messages at the top of the screen (the press still goes to what you pressed,
+  so drawing is not interrupted), or wait: it closes by itself 8 seconds after
+  it appears, with **No** as the default, since you did not want to do
+  anything about it.  Pressing inside the question, outside its buttons, does
+  nothing.  Only the time that the browser tab is visible counts, so a question
+  that arrives while you are in another tab is still there, with all its 8
+  seconds, when you come back.
   (The first time you open a room in a browser, you're not asked about
   earlier deletions, but you can still undo them with Undo Delete.)
 
@@ -944,11 +958,23 @@ brings pages back.
   "Delete Pages 1 and 4 to 10 for everyone? Pages 2 and 3 are locked and will
   stay."  Afterwards, a message at the top of the screen says
   "Pages 2 and 3 have been locked by users in the room."
-  Clicking anywhere outside the message removes it; clicking in it does
-  nothing.  The message appears only for deletions that you made, never when
-  someone else tries to delete a locked page.
-  If every page of the choice is locked, there is no dialog: you just get the
-  message, and nothing is deleted.
+  The message closes when you press the cross in its top right corner, when
+  you press anywhere outside the messages at the top of the screen, and by
+  itself 6 seconds after it appears (about a second to notice it and look at
+  it, four to read a sentence of up to 15 words at an easy pace, and a little
+  to spare).  Pressing inside it does nothing.  A new attempt to delete gives
+  a new message with a new 6 seconds.  The message appears only for deletions
+  that you made, never when someone else tries to delete a locked page.
+  If every page of the choice is locked (also when it is the only page of the
+  room), there is no dialog: you just get the message, and nothing is deleted.
+* The message about locked pages and the question about deleted pages can be
+  on the screen together, one below the other.  They count as one area:
+  pressing inside either one closes neither, closing one (with its cross, with
+  **Yes** or **No**, or when its time is up) leaves the other alone, and
+  pressing anywhere outside both closes both.  Each message slides down from
+  the top of the screen when it comes and back up when it goes, and the one
+  below moves along smoothly.  (If your system is set to reduce motion, they
+  appear and disappear at once.)
 * A deletion is a step of the room's history (for Undo Delete and Redo Delete)
   only if it deleted at least one page.  A deletion that found nothing but
   locked pages is not recorded, and does not end what could be redone.

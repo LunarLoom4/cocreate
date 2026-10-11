@@ -6,9 +6,10 @@
 ## /lib/pageHistory.coffee), and shows the prompt offering to bring back pages
 ## that someone else deleted.  It also places and removes page locks (a locked
 ## page is never deleted, see /lib/pageLocks.coffee) and shows the message that
-## pages were not deleted because they are locked.
+## pages were not deleted because they are locked.  Both messages come and go in
+## the same way (see `Notice`).
 
-import {createEffect, createRoot, createSignal, on as on_, onCleanup, Show} from 'solid-js'
+import {createEffect, createMemo, createRoot, createSignal, on as on_, onCleanup, Show, untrack} from 'solid-js'
 import {Random} from 'meteor/random'
 import {createTracker} from 'solid-meteor-data'
 
@@ -204,53 +205,170 @@ export setPageLock = (pageId, locked) ->
       console.error "Failed to #{if locked then 'lock' else 'unlock'} page on server: #{error}"
   return
 
-## The message that pages were not deleted because they are locked, at the top
-## of the screen (see ../main.styl).  Clicking anywhere outside it removes it;
-## clicking in it does nothing.  It is there for the person who tried to delete
-## the pages, not for the other people in the room.
-export LockedNotice = ->
+## How long a message stays on the screen when nobody closes it, in milliseconds.
+## The question about pages somebody else deleted needs a decision, so it stays
+## longer; if it runs out, that is the same as answering No.  The message about
+## locked pages only has to be found and read: a second to notice a message at
+## the top of the screen and look at it, about four seconds to read a sentence
+## of up to 15 words at an easy pace, and a little to spare.
+lockNoticeMs = 6000
+deletedNoticeMs = 8000
+
+## Call `callback` once `ms` milliseconds have passed while the page is visible.
+## The time the browser tab is hidden does not count, so a message that comes
+## while the person is in another tab still has all of its time when they come
+## back.  Returns a function that cancels it.
+afterVisible = (ms, callback) ->
+  left = ms
+  timer = null
+  started = 0
+  over = false
+  start = ->
+    started = Date.now()
+    timer = setTimeout finish, left
+  pause = ->
+    return unless timer?
+    clearTimeout timer
+    timer = null
+    left = Math.max 0, left - (Date.now() - started)
+  finish = ->
+    timer = null
+    cancel()
+    callback()
+  onVisibility = ->
+    if document.hidden
+      pause()
+    else unless timer? or over
+      start()
+  cancel = ->
+    over = true
+    clearTimeout timer
+    timer = null
+    document.removeEventListener 'visibilitychange', onVisibility
+  document.addEventListener 'visibilitychange', onVisibility
+  start() unless document.hidden
+  cancel
+
+## A message at the top of the screen (see `.pageNotices` in main.styl), which
+## shows what `props.item()` is, and nothing when that is `null`.
+##
+## * It slides down from the top when it comes and back up when it goes, and
+##   whatever is below it moves along smoothly.  (It stays in place while it
+##   leaves, so the animation can be seen: `shown` is the last message it had.)
+## * It closes when its cross is pressed, when a press lands anywhere outside
+##   the messages, and when its time (`props.ms`) is up.  A press inside any
+##   message does nothing, except on that message's own buttons.  The messages
+##   are one area: closing or pressing one does not close the other.  Closing
+##   is up to `props.onClose()`, which makes `props.item()` `null`.
+## * The time runs from when the message appears, only while the page is
+##   visible.  `props.keyOf(item)` tells which message it is: the same message
+##   updated in place keeps its time, another message in its place starts anew.
+## * If its time is up while a press on it is still going on (a click on Yes
+##   that began just before), it closes once the press is over, so that the
+##   click is not lost.
+Notice = (props) ->
+  [shown, setShown] = createSignal null
+  [leaving, setLeaving] = createSignal false
+  slot = null
+  timer = null
+
+  createEffect on_ (-> props.item()), (item) ->
+    clearTimeout timer
+    if item?
+      setShown item
+      setLeaving false
+    else if shown()?
+      setLeaving true
+      ## Taken out once the animation of main.styl is over (which is at once
+      ## when the person asks for no motion).  The animation is looked up a
+      ## moment later, so that a message that comes right back, like the one
+      ## about locked pages when the person tries again, never leaves at all.
+      timer = setTimeout ->
+        seconds = if slot? then parseFloat getComputedStyle(slot).animationDuration
+        timer = setTimeout ->
+          setShown null
+          setLeaving false
+        , (seconds or 0) * 1000
+      , 0
+  onCleanup -> clearTimeout timer
+
+  key = createMemo ->
+    if (item = props.item())? then props.keyOf item else null
+
   createEffect ->
-    return unless lockNotice()?
-    dismiss = ->
-      if (notice = lockNotice())?
-        notice.op.dismissed = true
-      setLockNotice null
-    ## The question about pages somebody else deleted is shown below this
-    ## message, and moves up when the message goes.  So a press on its buttons
-    ## removes the message only once the click is over: a button that moves away
-    ## before the mouse button is released does not get the click.
-    waitForClick = false
-    onPointerDown = (e) ->
-      return if e.target?.closest? '.pageLockNotice'
-      if e.target?.closest? '.pageDelNotice'
-        waitForClick = true
+    return unless key()?
+    pressed = expired = false
+    later = null
+    close = -> props.onClose()
+    cancel = afterVisible props.ms, ->
+      if pressed
+        expired = true
+        later = setTimeout close, 2000  # in case the end of the press is never heard
       else
-        dismiss()
-    onClick = (e) ->
-      return unless waitForClick
-      waitForClick = false
-      dismiss() unless e.target?.closest? '.pageLockNotice'
+        close()
+    onPointerDown = (e) ->
+      if slot?.contains e.target
+        pressed = true
+      else unless e.target?.closest? '.pageNotices'
+        close()
+    onPointerEnd = ->
+      return unless pressed
+      pressed = false
+      if expired
+        clearTimeout later
+        later = setTimeout close, 0  # after the click that the press makes
     document.addEventListener 'pointerdown', onPointerDown, true
-    document.addEventListener 'click', onClick, true
+    document.addEventListener 'pointerup', onPointerEnd, true
+    document.addEventListener 'pointercancel', onPointerEnd, true
     onCleanup ->
+      cancel()
+      clearTimeout later
       document.removeEventListener 'pointerdown', onPointerDown, true
-      document.removeEventListener 'click', onClick, true
+      document.removeEventListener 'pointerup', onPointerEnd, true
+      document.removeEventListener 'pointercancel', onPointerEnd, true
+
+  <Show when={shown()}>
+    <div class="pageNotice" classList={leaving: leaving()} ref={(el) -> slot = el}>
+      <div class="pageNoticeClip">
+        <div class={props.panel} role={props.role}>
+          {untrack(-> props.children(shown))}
+          <button type="button" class="pageNoticeClose" aria-label="Close this message"
+           onClick={-> props.onClose()}>
+            <svg viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </Show>
+
+## The message that pages were not deleted because they are locked.  It is there
+## for the person who tried to delete the pages, not for the other people in the
+## room.  Closing it (or letting it run out) also means that a late answer of
+## the server does not bring it back.
+export LockedNotice = ->
+  dismiss = ->
+    if (notice = lockNotice())?
+      notice.op.dismissed = true
+    setLockNotice null
   ## Pages of another room are not these pages
   createEffect on_ (-> currentRoom()?.id), ->
     setLockNotice null
   , defer: true
-  <Show when={lockNotice()}>
-    <div class="pageLockNotice" role="alert">
-      <p>{lockedText lockNotice().numbers}</p>
-    </div>
-  </Show>
+  <Notice panel="pageLockNotice" role="alert" item={lockNotice}
+   keyOf={(notice) -> notice.op} ms={lockNoticeMs} onClose={dismiss}>
+    {(notice) -> <p>{lockedText notice().numbers}</p>}
+  </Notice>
 
 ## Offer to bring back the pages of the latest deletion of the room, when
 ## someone else made it, as soon as it happens (if the room is open here) and
 ## when opening the room later.  Any person can bring the pages back for
 ## everyone.  Answering "No" only hides the question in this browser: the
-## deletion stays in the room's history, to undo with Undo Delete.  A later
-## deletion replaces the question, as if it were answered No.
+## deletion stays in the room's history, to undo with Undo Delete.  Closing the
+## question in any other way (its cross, a press outside the messages, or its
+## time running out) is answering No, and so is a later deletion that replaces
+## it.
 export DeletedNotice = ->
   loaded = createTracker ->
     room = currentRoom()
@@ -283,9 +401,6 @@ export DeletedNotice = ->
     return unless notice?
     Object.assign {room: room.id}, notice
 
-  text = ->
-    return '' unless (state = info())?
-    noticeText state.numbers
   bringBack = ->
     return unless (state = info())?
     undoDeletions state.ids
@@ -294,12 +409,15 @@ export DeletedNotice = ->
     return unless (state = info())?
     addAnswered state.room, state.ids
 
-  <Show when={info()}>
-    <div class="pageDelNotice" role="alertdialog">
-      <p>{text()}</p>
-      <div class="pageDelButtons">
-        <button type="button" onClick={bringBack}>Yes</button>
-        <button type="button" onClick={dismiss}>No</button>
-      </div>
-    </div>
-  </Show>
+  <Notice panel="pageDelNotice" role="alertdialog" item={info}
+   keyOf={(state) -> state.ids[0]} ms={deletedNoticeMs} onClose={dismiss}>
+    {(state) ->
+      <>
+        <p>{noticeText state().numbers}</p>
+        <div class="pageDelButtons">
+          <button type="button" onClick={bringBack}>Yes</button>
+          <button type="button" onClick={dismiss}>No</button>
+        </div>
+      </>
+    }
+  </Notice>

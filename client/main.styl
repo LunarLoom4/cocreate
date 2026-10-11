@@ -471,7 +471,7 @@ body:not(.history)
   display: flex
   flex-direction: column
   gap: 4px
-.pageDelOption, .pageDelHist, .pageDelDialog button, .pageDelNotice button
+.pageDelOption, .pageDelHist, .pageDelDialog button, .pageDelNotice .pageDelButtons button
   font: inherit
   color: inherit
   background: transparent
@@ -595,7 +595,11 @@ body:not(.history)
       background: #d44
 
 // Messages about pages at the top of the screen, one below the other.  They do
-// not block drawing: only the messages themselves take clicks.
+// not block drawing: only the messages themselves take clicks.  Each message
+// slides down from the top when it comes and back up when it goes, and the one
+// below it moves along (see `Notice` in PageTrash.coffee, which keeps a message
+// until its leaving animation is over, as long as `animation-duration` of
+// `.pageNotice.leaving` here).
 .pageNotices
   position: fixed
   z-index: 90
@@ -606,33 +610,101 @@ body:not(.history)
   max-width: calc(100% - 32px)
   display: flex
   flex-direction: column
-  gap: 8px
   pointer-events: none
-  > *
-    pointer-events: auto
+.pageNotice
+  display: grid
+  grid-template-rows: 1fr
+  filter: drop-shadow(0 3px 7px rgba(0, 0, 0, 0.35))  // (a box-shadow would be cut off by .pageNoticeClip)
+  animation: pageNoticeIn 0.35s cubic-bezier(0.22, 1, 0.36, 1)
+  &.leaving
+    animation: pageNoticeOut 0.3s cubic-bezier(0.4, 0, 1, 1) forwards
+    .pageDelNotice, .pageLockNotice
+      pointer-events: none
+.pageNoticeClip  // the message grows out of, and shrinks into, the top of its place
+  min-height: 0
+  overflow: hidden
+.pageDelNotice, .pageLockNotice
+  position: relative
+  box-sizing: border-box
+  margin-bottom: 8px  // the space to the next message goes along with this one
+  padding: 12px 16px
+  box-shadow: none  // (see .pageNotice)
+  pointer-events: auto
+  animation: pageNoticeSlideIn 0.35s cubic-bezier(0.22, 1, 0.36, 1)
+  .pageNotice.leaving &
+    animation: pageNoticeSlideOut 0.3s cubic-bezier(0.4, 0, 1, 1) forwards
+  p
+    margin: 0
+    padding-right: 16px  // (not under the cross)
+    text-wrap: balance
+@keyframes pageNoticeIn
+  from
+    grid-template-rows: 0fr
+    opacity: 0
+  to
+    grid-template-rows: 1fr
+    opacity: 1
+@keyframes pageNoticeOut
+  from
+    grid-template-rows: 1fr
+    opacity: 1
+  to
+    grid-template-rows: 0fr
+    opacity: 0
+@keyframes pageNoticeSlideIn
+  from
+    transform: translateY(-100%)
+  to
+    transform: none
+@keyframes pageNoticeSlideOut
+  from
+    transform: none
+  to
+    transform: translateY(-100%)
+@media (prefers-reduced-motion: reduce)
+  .pageNotice, .pageNotice.leaving, .pageNotice .pageDelNotice, .pageNotice .pageLockNotice
+    animation: none !important
+
+// The cross in the top right corner of a message
+.pageNoticeClose
+  position: absolute
+  top: 4px
+  right: 4px
+  width: 24px
+  height: 24px
+  padding: 0
+  display: flex
+  align-items: center
+  justify-content: center
+  font: inherit
+  color: inherit
+  background: transparent
+  border: none
+  border-radius: 3px
+  cursor: pointer
+  svg
+    width: 12px
+    height: 12px
+    fill: none
+    stroke: currentColor
+    stroke-width: 1.6
+    stroke-linecap: round
+  &:hover, &:focus-visible
+    background: rgba(0, 0, 0, 0.12)
+  &:active
+    background: rgba(0, 0, 0, 0.25)
 
 // "Pages ... were deleted. Bring them back?"
 .pageDelNotice
-  box-sizing: border-box
-  padding: 12px 16px
   p
     margin: 0 0 12px
-    text-wrap: balance
   .pageDelButtons
     display: flex
     gap: 10px
-  button
+  .pageDelButtons button
     flex: 1
     padding: 4px 10px
     text-align: center
-
-// "Pages ... have been locked by users in the room." (no buttons)
-.pageLockNotice
-  box-sizing: border-box
-  padding: 12px 16px
-  p
-    margin: 0
-    text-wrap: balance
 
 // Page list: the mark of a locked page, and who locked it in its tooltip
 .page .icon.lock svg

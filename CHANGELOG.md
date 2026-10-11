@@ -12,6 +12,8 @@ instead of version numbers.
 * Add Delete Pages button, with choices to delete the current page, all pages
   to its left, all pages to its right, or all pages (leaving one blank page),
   for everyone in the room.  Each choice asks for confirmation.
+  Deleting the only page of a room (with either of the first and last choices)
+  leaves one new blank page.
 * Deleting pages is reversible, and no data is removed.
   The same dropdown has **Undo Delete** and **Redo Delete** buttons, separate
   from the normal Undo/Redo, which bring back the pages of the room's last
@@ -21,15 +23,18 @@ instead of version numbers.
   You stay on the page you are viewing, unless Redo Delete deletes it.
   Everyone else in the room is asked whether to bring the latest deletion back,
   live and when they next open the room, with the page numbers they will have.
-  A newer deletion replaces the question.
+  A newer deletion replaces the question.  The question has a close button and
+  closes when pressing outside it, and after 8 seconds, all counting as No.
   Pages that are brought back open zoomed to fit.
 * Add Lock Page button: any user in the room can lock any page so that nobody,
   including themselves, can delete it, and remove their own lock again.
   A page stays locked while any user has a lock on it.  Locks are shared with
   the room live, saved with it, and shown in the page list.
   Deleting several pages skips the locked ones and deletes the rest, and the
-  user who tried is told which pages are locked (a message that goes away
-  when clicking outside it).  A deletion of locked pages only is not recorded
+  user who tried is told which pages are locked (a message with a close button
+  that goes away when clicking outside it, and after 6 seconds).  Both
+  messages slide in from the top and out again.  A deletion of locked pages
+  only is not recorded
   in the deletion history.  Deletions can now be of pages that are not next to
   each other, and Undo Delete brings each page back next to its own neighbors.
 

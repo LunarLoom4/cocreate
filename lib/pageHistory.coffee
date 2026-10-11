@@ -82,8 +82,10 @@ export staysText = (numbers) ->
 ## whose list of pages is `pages` and whose locked pages are `locked` (a `Set`):
 ## `deletable` are the pages that would be deleted, `numbers` the numbers they
 ## have, `stays` the numbers of the pages that are locked and would stay, and
-## `ask` the question to ask.  `kind` is which of the four ways to delete this is.
-export deletePlan = (kind, ids, pages, locked) ->
+## `ask` the question to ask.  Deleting every page leaves one blank page, and
+## says so, whichever of the four ways to delete it is (deleting the only page
+## of the room is that, too).
+export deletePlan = (ids, pages, locked) ->
   number = (id) -> pages.indexOf(id) + 1
   ascending = (a, b) -> a - b
   deletable = (id for id in ids when not locked.has id)
@@ -94,7 +96,7 @@ export deletePlan = (kind, ids, pages, locked) ->
       ''
     else if not deletable.length
       lockedText stays
-    else if kind == 'all' and not stays.length
+    else if deletable.length == pages.length
       if pages.length == 1
         "Delete Page 1 and leave a blank page?"
       else
@@ -121,7 +123,7 @@ export redoPlan = (deletion, pages, locked = new Set) ->
 export undoAsk = ({deletion, missing, numbers, others}) ->
   ## "All" is only for a deletion that deleted every page (and so added a blank
   ## page), not for one that left locked pages
-  emptied = deletion.kind == 'all' and deletion.blank?
+  emptied = deletion.blank?
   all = emptied and missing.length == deletion.ids.length and missing.length > 1
   what = if all then "all #{missing.length} pages" else pagesLabel numbers
   if emptied and others
