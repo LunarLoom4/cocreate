@@ -9,7 +9,7 @@ import {gridOffset, maybeSnapPointToGrid} from './Grid'
 import {Name, name} from './Name'
 import {Page} from './Page'
 import {PageList} from './PageList'
-import {DeletedNotice} from './PageTrash'
+import {DeletedNotice, LockedNotice} from './PageTrash'
 import {Room} from './Room'
 import {ToolCategory} from './Tool'
 import {undoStack} from './UndoStack'
@@ -526,7 +526,10 @@ export DrawAppRoom = ->
       <div id="dragzone" class="overlay"/>
       <ConnectionStatus/>
     </div>
-    <DeletedNotice/>
+    <div class="pageNotices">
+      <LockedNotice/>
+      <DeletedNotice/>
+    </div>
     {if loading()
       <LoadingIcon/>
     }

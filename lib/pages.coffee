@@ -6,6 +6,7 @@ import {validId} from './id'
 import {checkRoom} from './rooms'
 import {defaultGridType, validGridType} from './grid'
 import {deletionKinds, historyLimit, topOf} from './pageHistory'
+import {lockedPages} from './pageLocks'
 import {planOrderRestore} from './pageOrder'
 
 @Pages = new Mongo.Collection 'pages'
@@ -15,10 +16,11 @@ Deleting pages is reversible, and the history of deleting is the same for
 everyone in a room.  The rules, which everything below follows:
 
 * A room document holds its list of `pages`, two stacks of deletion IDs, and
-  two more fields.  `undo` is the deletions that can be undone, the latest at
+  three more fields.  `undo` is the deletions that can be undone, the latest at
   the end.  `redo` is the deletions that were undone, the one undone last at
   the end.  Each stack keeps at most `historyLimit` deletions.  `latest` is the
-  ID of the latest deletion made, and `rev` counts changes of the stacks.
+  ID of the latest deletion made, and `rev` counts changes of the stacks and of
+  the locks.  `locks` is the page locks (see below).
 * Each deletion is one document of `PageDeletions` (see ./pageHistory) that
   never changes once the room refers to it.  It is written first, and the
   room's stacks refer to it in the same write that changes the pages.
@@ -28,7 +30,8 @@ everyone in a room.  The rules, which everything below follows:
   So the changes of a room happen one after another, in an order that every
   reader sees, and a change that finds the room different plans again.
   Nothing can be half done, and nothing needs to be repaired.
-* Deleting pages puts a deletion at the end of `undo` and empties `redo`.
+* Deleting pages puts a deletion at the end of `undo` and empties `redo`.  The
+  pages of a deletion need not be next to each other.
   Undoing takes the deletion at the end of `undo` and puts it at the end of
   `redo`; it only ever brings pages back.  Redoing takes the deletion at the
   end of `redo`, deletes its pages that are in the room, and puts the result
@@ -39,6 +42,17 @@ everyone in a room.  The rules, which everything below follows:
 * Deleting every page of a room adds one blank page, in the same update.  The
   caller says what ID the page gets, so that the page it shows at once is the
   page that is saved.
+* Anyone in the room can lock any page of it.  A lock is `{page, by}` in the
+  room's `locks`, where `by` is the browser that placed it; a browser has at
+  most one lock on a page, and only it can remove that lock.  A page that has
+  any lock cannot be deleted, by anyone, including the browsers that locked it:
+  deleting or redoing the deletion of pages leaves the locked ones alone and
+  deletes the rest, and tells which ones it left.  A deletion that deletes no
+  page does nothing at all and is not part of the history.  Locking and
+  unlocking change the room in one update too, and count in `rev`, so that a
+  deletion planned before it plans again, and a locked page is never deleted.
+  Only a page that is in the room can be locked, so a lock never outlives its
+  page, and bringing pages back does not change the locks.
 ###
 
 @PageDeletions = new Mongo.Collection 'pageDeletions'
@@ -106,13 +120,16 @@ updateRoom = (roomId, selector, changes, shows) ->
     true
 
 ## Delete pages from a room, either the `requested` ones or, for redoing the
-## deletion `redoOf`, the pages of that deletion that are in the room.  This is
-## the one update described at the top.  `recordId` is the ID the new deletion
-## gets, and `blank` is what the new blank page (if the room needs one) is made
-## from, with its ID.  Returns the ID of the blank page if one was added.
+## deletion `redoOf`, the pages of that deletion that are in the room, except
+## the locked ones.  This is the one update described at the top.  `recordId` is
+## the ID the new deletion gets, and `blank` is what the new blank page (if the
+## room needs one) is made from, with its ID.  Returns `{locked, blank}`:
+## `locked` are the IDs of the requested pages that are in the room and locked,
+## so were left alone, and `blank` is the ID of the blank page, if one was added.
 deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
   at = new Date
   wroteRecord = wroteBlank = committed = unsure = false
+  locked = []
   try
     for [1..planAttempts]
       room = checkRoom roomId
@@ -120,18 +137,21 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
       undo = room.undo ? []
       redo = room.redo ? []
       wanted = requested
+      ## Redoing: only the deletion undone last can be redone
       if redoOf?
-        ## Only the deletion undone last can be redone
-        return unless topOf(redo) == redoOf
+        return {locked: []} unless topOf(redo) == redoOf
         redone = PageDeletions.findOne redoOf
-        return unless redone?.room == roomId
+        return {locked: []} unless redone?.room == roomId
         wanted = redone.ids
         kind = redone.kind
       ## Pages that are not in the room (e.g. already deleted by someone else at
-      ## the same time) are left out.
+      ## the same time) are left out, and so are the locked ones.
       wanted = new Set wanted
-      pageIds = (pageId for pageId in pages when wanted.has pageId)
-      return unless pageIds.length
+      inRoom = (pageId for pageId in pages when wanted.has pageId)
+      keep = lockedPages room
+      locked = (pageId for pageId in inRoom when keep.has pageId)
+      pageIds = (pageId for pageId in inRoom when not keep.has pageId)
+      return {locked} unless pageIds.length
       addBlank = pageIds.length == pages.length
       if addBlank and not blank?
         throw new Meteor.Error "Cannot delete every page in a room"
@@ -150,8 +170,12 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
         order: if addBlank then pages.concat [blank.id] else pages
         at: at
       record.by = remoteId if remoteId?
+      record.blank = blank.id if addBlank
       if wroteRecord
-        PageDeletions.update recordId, {$set: record},
+        ## (The earlier plan may have added a blank page and this one may not.)
+        rewrite = {$set: record}
+        rewrite.$unset = {blank: ''} unless addBlank
+        PageDeletions.update recordId, rewrite,
           channel: deletionsChannel roomId
       else
         PageDeletions.insert Object.assign({_id: recordId}, record),
@@ -205,29 +229,35 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
     , channel: "rooms::#{roomId}::remotes"
   catch error
     console.error "Could not clear the cursors of room #{roomId}: #{error}"
-  blank.id if addBlank
+  result = {locked}
+  result.blank = blank.id if addBlank
+  result
 
 ## What the client shows right away for `deleteStep`, before the server answers
+## (and what it returns, in the same way)
 deleteStub = (roomId, requested, redoOf, blank) ->
   room = Rooms.findOne roomId
-  return unless room?
+  return {locked: []} unless room?
   pages = room.pages ? []
   wanted = requested
   if redoOf?
-    return unless topOf(room.redo) == redoOf
+    return {locked: []} unless topOf(room.redo) == redoOf
     wanted = PageDeletions.findOne(redoOf)?.ids ? []
   wanted = new Set wanted
-  pageIds = (pageId for pageId in pages when wanted.has pageId)
-  return unless pageIds.length
+  inRoom = (pageId for pageId in pages when wanted.has pageId)
+  keep = lockedPages room
+  locked = (pageId for pageId in inRoom when keep.has pageId)
+  pageIds = (pageId for pageId in inRoom when not keep.has pageId)
+  return {locked} unless pageIds.length
   if pageIds.length == pages.length
-    return unless blank?
+    return {locked} unless blank?
     Pages.insert blankPage(roomId, blank, {}),
       channel: pagesChannel roomId
     Rooms.update roomId, $set: pages: [blank.id]
-    return blank.id
+    return {locked, blank: blank.id}
   deleting = new Set pageIds
   Rooms.update roomId, $set: pages: (pageId for pageId in pages when not deleting.has pageId)
-  return
+  {locked}
 
 ## Undo the deletion `id`, if it is the one at the end of `undo`: put back its
 ## pages that are not in the room, next to their old neighbors (see
@@ -330,8 +360,11 @@ Meteor.methods
   ## have `redoOf`, the deletion being redone (it must be the latest one that was
   ## undone; then `pageIds` is not used but its pages are deleted), and `blank`,
   ## what a new blank page needs (its `id`, and how it looks) if deleting leaves
-  ## the room with no page.
-  ## Returns the ID of the blank page, if one was added.
+  ## the room with no page.  Locked pages are not deleted (see the top): if
+  ## there is no other page to delete, nothing is done.
+  ## Returns `{locked, blank}`: the IDs of the requested pages that were left
+  ## alone because they are locked, and the ID of the blank page, if one was
+  ## added.
   pagesDel: (pageIds, remoteId, kind, options = {}) ->
     check pageIds, [String]
     check remoteId, Match.Optional String
@@ -374,6 +407,26 @@ Meteor.methods
       break unless back?
       restored.push back...
     restored
+
+  ## Lock a page for the browser `remoteId`, so that nobody can delete it, or
+  ## (`locked` false) remove that browser's lock on it.  The page stays locked
+  ## while any other browser has a lock on it.  Locking a page that is not in the
+  ## room (e.g. just deleted) does nothing.
+  pageLock: (pageId, locked, remoteId) ->
+    check pageId, String
+    check locked, Boolean
+    check remoteId, Match.Where validId
+    roomId = checkPage(pageId).room
+    lock = {page: pageId, by: remoteId}
+    if locked
+      Rooms.update {_id: roomId, pages: pageId},
+        $addToSet: locks: lock
+        $inc: rev: 1
+    else
+      Rooms.update roomId,
+        $pull: locks: lock
+        $inc: rev: 1
+    return
 
   gridToggle: (page, gridType) ->
     check page, String

@@ -458,7 +458,7 @@ body:not(.history)
   font-size: larger
 
 // Delete Pages dropdown (below its button) and confirmation (centered)
-.pageDelMenu, .pageDelDialog, .pageDelNotice
+.pageDelMenu, .pageDelDialog, .pageDelNotice, .pageLockNotice
   background: var(--palette-color)
   border: var(--palette-border) outset
   box-shadow: 0 3px 14px rgba(0, 0, 0, 0.35)
@@ -594,8 +594,9 @@ body:not(.history)
     &:hover
       background: #d44
 
-// "Pages ... were deleted. Bring them back?" (does not block drawing)
-.pageDelNotice
+// Messages about pages at the top of the screen, one below the other.  They do
+// not block drawing: only the messages themselves take clicks.
+.pageNotices
   position: fixed
   z-index: 90
   top: calc(var(--palette-size) + 12px)
@@ -603,6 +604,15 @@ body:not(.history)
   transform: translateX(-50%)
   width: 22em
   max-width: calc(100% - 32px)
+  display: flex
+  flex-direction: column
+  gap: 8px
+  pointer-events: none
+  > *
+    pointer-events: auto
+
+// "Pages ... were deleted. Bring them back?"
+.pageDelNotice
   box-sizing: border-box
   padding: 12px 16px
   p
@@ -615,6 +625,20 @@ body:not(.history)
     flex: 1
     padding: 4px 10px
     text-align: center
+
+// "Pages ... have been locked by users in the room." (no buttons)
+.pageLockNotice
+  box-sizing: border-box
+  padding: 12px 16px
+  p
+    margin: 0
+    text-wrap: balance
+
+// Page list: the mark of a locked page, and who locked it in its tooltip
+.page .icon.lock svg
+  height: 0.7em
+.pageLockInfo
+  text-align: center
 
 .close
   float: right

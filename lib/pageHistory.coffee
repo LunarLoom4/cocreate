@@ -14,9 +14,14 @@
 ## delete), `ids` are the pages it deleted, and `order` is the room's page list
 ## right before it, which is how its pages find their way back (see
 ## `planOrderRestore`: by their neighbors, never by page number).  `by` is the
-## browser that made it.  A deletion never changes once it is in a stack.
+## browser that made it.  `blank` is the ID of the blank page that the deletion
+## added, if it deleted every page.  A deletion never changes once it is in a
+## stack.  The pages of a deletion need not be next to each other, and a locked
+## page is never one of them (see /lib/pageLocks.coffee): pages that were locked
+## when pages were deleted just stayed.
 
 import {planOrderRestore} from './pageOrder'
+import {lockedPages} from './pageLocks'
 
 ## How many deletions are kept in each stack, in each room
 export historyLimit = 40
@@ -62,44 +67,96 @@ export undoPlan = (deletion, pages) ->
   others = pages.some (id) -> id not in deletion.ids
   {deletion, missing, numbers, others}
 
+## "Page 3 has been locked by users in the room.", "Pages 6 and 8 have been
+## locked by users in the room."  (For pages that a deletion left alone.)
+export lockedText = (numbers) ->
+  verb = if numbers.length == 1 then 'has' else 'have'
+  "#{pagesLabel numbers} #{verb} been locked by users in the room."
+
+## "Page 6 is locked and will stay.", "Pages 6 and 8 are locked and will stay."
+export staysText = (numbers) ->
+  verb = if numbers.length == 1 then 'is' else 'are'
+  "#{pagesLabel numbers} #{verb} locked and will stay."
+
+## What deleting `ids` (pages of the room, in its order) would do, in the room
+## whose list of pages is `pages` and whose locked pages are `locked` (a `Set`):
+## `deletable` are the pages that would be deleted, `numbers` the numbers they
+## have, `stays` the numbers of the pages that are locked and would stay, and
+## `ask` the question to ask.  `kind` is which of the four ways to delete this is.
+export deletePlan = (kind, ids, pages, locked) ->
+  number = (id) -> pages.indexOf(id) + 1
+  ascending = (a, b) -> a - b
+  deletable = (id for id in ids when not locked.has id)
+  numbers = (number(id) for id in deletable).sort ascending
+  stays = (number(id) for id in ids when locked.has id).sort ascending
+  ask =
+    if not ids.length
+      ''
+    else if not deletable.length
+      lockedText stays
+    else if kind == 'all' and not stays.length
+      if pages.length == 1
+        "Delete Page 1 and leave a blank page?"
+      else
+        "Delete all #{pages.length} pages and leave one blank page?"
+    else if stays.length
+      "Delete #{pagesLabel numbers} for everyone? #{staysText stays}"
+    else
+      "Delete #{pagesLabel numbers} for everyone?"
+  {deletable, numbers, stays, ask}
+
 ## What Redo Delete would do for `deletion`: delete its pages that are in the
-## room.  `blank` is whether that would leave no page at all, so that a blank
-## page gets added.
-export redoPlan = (deletion, pages) ->
-  present = (id for id in deletion.ids when id in pages)
-  return unless present.length
-  numbers = (pages.indexOf(id) + 1 for id in present).sort (a, b) -> a - b
-  {deletion, present, numbers, blank: present.length == pages.length}
+## room and not locked.  `present` are those, `stays` the numbers of the pages
+## of the deletion that are in the room and locked, so they stay.  `blank` is
+## whether that would leave no page at all, so that a blank page gets added.
+export redoPlan = (deletion, pages, locked = new Set) ->
+  inRoom = (id for id in deletion.ids when id in pages)
+  return unless inRoom.length
+  present = (id for id in inRoom when not locked.has id)
+  ascending = (a, b) -> a - b
+  numbers = (pages.indexOf(id) + 1 for id in present).sort ascending
+  stays = (pages.indexOf(id) + 1 for id in inRoom when locked.has id).sort ascending
+  {deletion, present, numbers, stays, blank: present.length > 0 and present.length == pages.length}
 
 export undoAsk = ({deletion, missing, numbers, others}) ->
-  all = deletion.kind == 'all' and missing.length == deletion.ids.length and missing.length > 1
+  ## "All" is only for a deletion that deleted every page (and so added a blank
+  ## page), not for one that left locked pages
+  emptied = deletion.kind == 'all' and deletion.blank?
+  all = emptied and missing.length == deletion.ids.length and missing.length > 1
   what = if all then "all #{missing.length} pages" else pagesLabel numbers
-  if deletion.kind == 'all' and others
+  if emptied and others
     "Bring back #{what}? The blank page stays."
   else
     "Bring back #{what}?"
 
-export redoAsk = ({deletion, present, numbers, blank}) ->
+export redoAsk = ({deletion, present, numbers, stays, blank}) ->
+  return lockedText stays unless present.length
   all = deletion.kind == 'all' and present.length == deletion.ids.length and present.length > 1
   what = if all then "all #{present.length} pages" else pagesLabel numbers
-  if blank
-    "Delete #{what} again? A blank page will be added."
+  ask =
+    if blank
+      "Delete #{what} again? A blank page will be added."
+    else
+      "Delete #{what} again?"
+  if stays.length
+    "#{ask} #{staysText stays}"
   else
-    "Delete #{what} again?"
+    ask
 
 ## What the Undo Delete and Redo Delete buttons would do right now, as
 ## `{undo, redo}`, each `{id, ask}` (the deletion and the question to ask) or
 ## missing if there is nothing to do.  Undo Delete is always for the latest
 ## deletion that has not been undone, and Redo Delete for the one undone last:
 ## `room` is the room's document, `deletions` the room's `PageDeletions`, and
-## `pages` its list of pages.
+## `pages` its list of pages.  A redo choice has `deletes`, whether it has any
+## page that is not locked to delete (if not, it only says that they are locked).
 export historyChoices = (room, deletions, pages) ->
   choices = {}
   find = (id) -> deletions.find (deletion) -> deletion._id == id
   if (deletion = find topOf room?.undo)? and (plan = undoPlan deletion, pages)?
     choices.undo = {id: deletion._id, ask: undoAsk plan}
-  if (deletion = find topOf room?.redo)? and (plan = redoPlan deletion, pages)?
-    choices.redo = {id: deletion._id, ask: redoAsk plan}
+  if (deletion = find topOf room?.redo)? and (plan = redoPlan deletion, pages, lockedPages room)?
+    choices.redo = {id: deletion._id, ask: redoAsk(plan), deletes: plan.present.length > 0}
   choices
 
 ## The deletion to ask about, if any: only the latest deletion of the room is

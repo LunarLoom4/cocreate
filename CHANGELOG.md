@@ -23,6 +23,15 @@ instead of version numbers.
   live and when they next open the room, with the page numbers they will have.
   A newer deletion replaces the question.
   Pages that are brought back open zoomed to fit.
+* Add Lock Page button: any user in the room can lock any page so that nobody,
+  including themselves, can delete it, and remove their own lock again.
+  A page stays locked while any user has a lock on it.  Locks are shared with
+  the room live, saved with it, and shown in the page list.
+  Deleting several pages skips the locked ones and deletes the rest, and the
+  user who tried is told which pages are locked (a message that goes away
+  when clicking outside it).  A deletion of locked pages only is not recorded
+  in the deletion history.  Deletions can now be of pages that are not next to
+  each other, and Undo Delete brings each page back next to its own neighbors.
 
 ## 2026-05-22
 

@@ -6,8 +6,10 @@ import {createTracker} from 'solid-meteor-data'
 import {defineTool} from './defineTool'
 import {currentRoom, currentPage, currentPageId, gotoPageId} from '../AppState'
 import {defaultGrid, defaultGridType} from '../Grid'
-import {deletePages, historyInfo, redoDelete, undoDelete} from '../PageTrash'
-import {Icon, trashPath} from '../lib/icons'
+import {browserId, deletePages, historyInfo, redoDelete, setPageLock, undoDelete} from '../PageTrash'
+import {Icon, modIcon, trashPath} from '../lib/icons'
+import {deletePlan} from '/lib/pageHistory'
+import {lockedPages, lockSummary} from '/lib/pageLocks'
 
 defineTool
   name: 'pagePrev'
@@ -100,52 +102,49 @@ openMenu = ->
     left: Math.max 8, Math.min rect.left, window.innerWidth - menuWidth - 8
     top: rect.bottom + 4
 
-## Human-readable page numbers: "Page 3", "Pages 3 and 4", "Pages 3 to 7"
-pageRange = (first, last) ->
-  if first == last
-    "Page #{first}"
-  else if last == first + 1
-    "Pages #{first} and #{last}"
-  else
-    "Pages #{first} to #{last}"
-
-## The delete choices for the current page, with the pages each would delete.
+## The delete choices for the current page, with the pages each would be for
+## (`ids`) and the ones it would really delete (`deletable`: locked pages stay,
+## see /lib/pageLocks.coffee), and the question to ask.  Pages are not deleted
+## in the room's list order only: they need not be next to each other.
 deleteChoices = ->
   room = currentRoom()
-  pages = room?.data()?.pages
+  data = room?.data()
+  pages = data?.pages
   index = room?.pageIndex currentPage()
   return [] unless pages? and index?
+  locked = lockedPages data
   n = pages.length
+  choice = (fields) ->
+    plan = deletePlan fields.kind, fields.ids, pages, locked
+    Object.assign fields,
+      deletable: plan.deletable
+      ask: plan.ask
   [
-    kind: 'current'
-    label: 'Delete Current Page'
-    ids: [pages[index]]
-    disabled: n <= 1
-    note: "This is the only page. Can't be deleted."
-    ask: "Delete Page #{index+1} for everyone?"
+    choice
+      kind: 'current'
+      label: 'Delete Current Page'
+      ids: [pages[index]]
+      disabled: n <= 1
+      note: "This is the only page. Can't be deleted."
   ,
-    kind: 'left'
-    label: 'Delete All Pages to Left'
-    ids: pages[...index]
-    disabled: index <= 0
-    note: 'No pages to the left.'
-    ask: "Delete #{pageRange 1, index} for everyone?"
+    choice
+      kind: 'left'
+      label: 'Delete All Pages to Left'
+      ids: pages[...index]
+      disabled: index <= 0
+      note: 'No pages to the left.'
   ,
-    kind: 'right'
-    label: 'Delete All Pages to Right'
-    ids: pages[index+1..]
-    disabled: index >= n - 1
-    note: 'No pages to the right.'
-    ask: "Delete #{pageRange index+2, n} for everyone?"
+    choice
+      kind: 'right'
+      label: 'Delete All Pages to Right'
+      ids: pages[index+1..]
+      disabled: index >= n - 1
+      note: 'No pages to the right.'
   ,
-    kind: 'all'
-    label: 'Delete All Pages'
-    ids: pages
-    ask:
-      if n == 1
-        "Delete Page 1 and leave a blank page?"
-      else
-        "Delete all #{n} pages and leave one blank page?"
+    choice
+      kind: 'all'
+      label: 'Delete All Pages'
+      ids: pages
   ]
 
 ## Delete choice icons: a trash can with a small overlay at its bottom right
@@ -287,6 +286,8 @@ DeleteOverlays = ->
       when 'delete'
         choice = choices().find (c) -> c.kind == asked.kind
         return nothingToDo if not choice? or choice.disabled
+        ## Locked since the choice was made: nothing to confirm, only to tell
+        return text: choice.ask unless choice.deletable.length
         text: "#{choice.ask} You can reverse this with Undo Delete."
         label: 'Delete'
         danger: true
@@ -298,6 +299,7 @@ DeleteOverlays = ->
         run: -> undoDelete info.id
       when 'redo'
         return nothingToDo unless (info = hist().redo)?
+        return text: info.ask unless info.deletes  # all locked now
         text: info.ask
         label: 'Redo Delete'
         danger: true
@@ -314,12 +316,20 @@ DeleteOverlays = ->
     choice = choices().find (c) -> c.kind == kind
     return if not choice? or choice.disabled
     closeMenu()
-    setPending {action: 'delete', kind}
+    if choice.deletable.length
+      setPending {action: 'delete', kind}
+    else
+      ## Every page it is for is locked: nothing to confirm.  Deleting them
+      ## deletes nothing and tells the person which pages are locked.
+      deletePages choice.ids, kind: choice.kind
   chooseHist = (action) -> (e) ->
     e.stopPropagation()
-    return unless hist()[action]?
+    return unless (info = hist()[action])?
     closeMenu()
-    setPending {action}
+    if action == 'redo' and not info.deletes
+      redoDelete info.id  # every page it is for is locked: only tells so
+    else
+      setPending {action}
   confirm = (e) ->
     e.stopPropagation()
     chosen = dialog()
@@ -399,3 +409,39 @@ defineTool
       cancelDelete()
       openMenu()
   portal: -> <DeleteOverlays/>
+
+## Lock Page: the current page cannot be deleted by anyone (including you)
+## while any user has a lock on it.  Everyone in the room sees the locks, and
+## each user can only remove their own lock.  The button shows a closed padlock
+## while the current page is locked by anybody, and is pressed while this
+## browser has a lock on it.
+lockHere = ->
+  pageId = currentPage()?.id
+  if pageId?
+    lockSummary currentRoom()?.data(), pageId, browserId
+  else
+    {count: 0, mine: false, others: 0}
+holdsHere = -> lockHere().mine
+
+users = (n) -> "#{n} #{if n == 1 then 'user' else 'users'}"
+lockHelp = ->
+  {count, mine, others} = lockHere()
+  if not count
+    'Lock the current page so that nobody, including you, can delete it. Only you can remove your lock'
+  else if mine and not others
+    'You have locked this page, so nobody can delete it. Click to remove your lock'
+  else if mine
+    "You and #{if others == 1 then 'another user' else "#{others} other users"} have locked this page. Click to remove your lock: the page stays locked while the others keep theirs"
+  else
+    "This page is locked by #{users count}. Only they can remove their lock. Click to lock it as well, so that it stays locked when they unlock"
+
+defineTool
+  name: 'pageLock'
+  category: 'page'
+  icon: -> modIcon (if lockHere().count then 'lock' else 'lock-open'), fill: 'currentColor'
+  help: lockHelp
+  active: holdsHere
+  click: ->
+    pageId = currentPage()?.id
+    return unless pageId?
+    setPageLock pageId, not holdsHere()
