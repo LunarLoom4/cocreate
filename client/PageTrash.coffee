@@ -19,7 +19,7 @@ import storage from './lib/storage'
 import {StorageSet} from './lib/storageSet'
 import {validId} from '/lib/id'
 import {deletionKinds, historyChoices, lockedText, noticeFor, noticeText, topOf} from '/lib/pageHistory'
-import {splitLocked} from '/lib/pageLocks'
+import {lockOwner, splitLocked, validLockKey} from '/lib/pageLocks'
 
 ## Identifies this browser (all its tabs), to not ask it about its own deletions
 ## and to tell which page locks are its own
@@ -30,6 +30,20 @@ unless validId browserId
   browserId = Random.id()
   try
     window.localStorage.setItem 'browserId', browserId
+
+## The secret key that proves that a page lock is this browser's.  It stays in
+## this browser: only the owner that it gives (`lockHolder`) is ever shown to
+## the room, and the server works out the same owner from the key when it is
+## sent to place or remove a lock (see /lib/pageLocks.coffee).
+lockKey = null
+try
+  lockKey = window.localStorage.getItem 'lockKey'
+unless validLockKey lockKey
+  lockKey = Random.secret()
+  try
+    window.localStorage.setItem 'lockKey', lockKey
+## The owner of this browser's locks: what `by` is in the locks that it placed
+export lockHolder = lockOwner lockKey
 
 ## Deletions that this browser has already answered about in each room, as a
 ## set of deletion IDs, saved one by one (see ./lib/storageSet).  `seen` is
@@ -99,14 +113,33 @@ latestOp = null
 
 ascending = (a, b) -> a - b
 
-## Delete `ids` from the room, after going to `target` (if any), so that the
-## page being viewed never disappears from under the viewer.  The server adds
-## the deletion to the room's history.  `kind` is which of the four ways to
-## delete this is, and `redoOf` the deletion that is being redone, if any.  If
-## this deletes every page, the server leaves a new blank page (made like the
-## current page) and it is shown.  Locked pages are not deleted (that is up to
-## the server): if some of `ids` are locked, the person is told so.
-removePages = (ids, target, kind, redoOf) ->
+## Show the message that the pages `ids` are locked (the ones of them that are
+## in the room and locked), without asking the server for anything.  The
+## numbers are the ones the pages have now.
+tellLocked = (ids) ->
+  room = currentRoom()
+  return unless room?
+  order = room.data()?.pages ? []
+  numbers = (order.indexOf(id) + 1 for id in ids when id in order).sort ascending
+  return unless numbers.length
+  op = latestOp = {dismissed: false}
+  setLockNotice null  # the message of an earlier attempt is not about this one
+  setLockNotice {op, numbers}
+  return
+
+## Delete `ids`, which are pages of the room that are not locked as far as this
+## browser can tell, after going to `target` (if any), so that the page being
+## viewed never disappears from under the viewer.  The server adds the deletion
+## to the room's history.  `kind` is which of the four ways to delete this is,
+## and `redoOf` the deletion that is being redone, if any.  `stays` are the
+## pages that the person asked to delete as well, but that are locked, so are
+## not asked for.  The server deletes only the pages that are asked for, so
+## nothing else is deleted, whatever other people do while the request is on its
+## way.  If this deletes every page, the server leaves a new blank page (made
+## like the current page) and it is shown.  Locked pages are not deleted (that
+## is up to the server): if some of `ids` have been locked since, or `stays` is
+## not empty, the person is told so.
+removePages = (ids, target, kind, redoOf, stays = []) ->
   room = currentRoom()
   return unless room?
   run = ->
@@ -115,12 +148,13 @@ removePages = (ids, target, kind, redoOf) ->
     return unless present.length
     ## The message about locked pages, from what the browser works out at once
     ## and then (if it differs) from what the server says, unless the person
-    ## sent the message away or made another deletion since
+    ## sent the message away, made another deletion since, or left the room
     op = latestOp = {dismissed: false}
     setLockNotice null  # the message of an earlier deletion is not about this one
     tell = (result) ->
-      return if op.dismissed or latestOp != op
-      numbers = (order.indexOf(id) + 1 for id in result?.locked ? [] when id in order).sort ascending
+      return if op.dismissed or latestOp != op or currentRoom()?.id != room.id
+      lockedIds = Array.from new Set stays.concat(result?.locked ? [])
+      numbers = (order.indexOf(id) + 1 for id in lockedIds when id in order).sort ascending
       if numbers.length
         setLockNotice {op, numbers}
       else if lockNotice()?.op == op
@@ -162,14 +196,20 @@ export historyInfo = ->
 
 ## Delete pages.  `kind` is which of the four choices this is.  If this deletes
 ## every page, the room is left with a new blank page.  The deletion is added to
-## the room's history for Undo Delete.
+## the room's history for Undo Delete.  Only the pages of `ids` that are not
+## locked are asked for, so that a page that is unlocked while the request is on
+## its way is never deleted: that is not what the person was asked about.  If all
+## of them are locked, nothing is sent: the person is told that they are.
 export deletePages = (ids, {kind} = {}) ->
   room = currentRoom()
   return unless room?
+  {deletable, stays} = splitLocked room.data(), ids
+  unless deletable.length
+    tellLocked stays
+    return
   ## Locked pages stay, so the page being viewed only has to be replaced if it
   ## is going to be deleted
-  {deletable} = splitLocked room.data(), ids
-  removePages ids, replacementFor(deletable), (if kind in deletionKinds then kind else 'current')
+  removePages deletable, replacementFor(deletable), (if kind in deletionKinds then kind else 'current'), undefined, stays
   return
 
 ## Undo Delete, for the deletion that was asked about: bring back its pages that
@@ -192,15 +232,18 @@ export redoDelete = (id) ->
   pages = room.data()?.pages ? []
   ids = (pageId for pageId in deletion.ids when pageId in pages)
   return unless ids.length
-  {deletable} = splitLocked room.data(), ids
-  removePages ids, replacementFor(deletable), deletion.kind, deletion._id
+  {deletable, stays} = splitLocked room.data(), ids
+  unless deletable.length
+    tellLocked stays  # nothing to redo, and nothing is sent
+    return
+  removePages deletable, replacementFor(deletable), deletion.kind, deletion._id, stays
   return
 
 ## Lock the page for this browser, so that nobody (including this browser) can
 ## delete it, or (`locked` false) remove this browser's lock on it.  The page
 ## stays locked while any other browser has a lock on it.
 export setPageLock = (pageId, locked) ->
-  Meteor.call 'pageLock', pageId, locked, browserId, (error) ->
+  Meteor.call 'pageLock', pageId, locked, lockKey, (error) ->
     if error?
       console.error "Failed to #{if locked then 'lock' else 'unlock'} page on server: #{error}"
   return
@@ -352,8 +395,10 @@ export LockedNotice = ->
     if (notice = lockNotice())?
       notice.op.dismissed = true
     setLockNotice null
-  ## Pages of another room are not these pages
+  ## Pages of another room are not these pages, and neither is the answer to
+  ## a deletion of the room that was left
   createEffect on_ (-> currentRoom()?.id), ->
+    latestOp = null
     setLockNotice null
   , defer: true
   <Notice panel="pageLockNotice" role="alert" item={lockNotice}

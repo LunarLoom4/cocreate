@@ -28,13 +28,16 @@ instead of version numbers.
   Pages that are brought back open zoomed to fit.
 * Add Lock Page button: any user in the room can lock any page so that nobody,
   including themselves, can delete it, and remove their own lock again.
-  A page stays locked while any user has a lock on it.  Locks are shared with
+  A page stays locked while any user has a lock on it.  Only the browser that
+  placed a lock can remove it: the room sees an owner that is made from a
+  secret key of the browser, never the key itself.  Locks are shared with
   the room live, saved with it, and shown in the page list.
   Deleting several pages skips the locked ones and deletes the rest, and the
   user who tried is told which pages are locked (a message with a close button
   that goes away when clicking outside it, and after 6 seconds).  Both
-  messages slide in from the top and out again.  A deletion of locked pages
-  only is not recorded
+  messages slide in from the top and out again.  A deletion only ever deletes
+  the pages that the person was asked about, and when every page is locked
+  nothing is sent at all.  A deletion of locked pages only is not recorded
   in the deletion history.  Deletions can now be of pages that are not next to
   each other, and Undo Delete brings each page back next to its own neighbors.
 

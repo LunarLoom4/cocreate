@@ -6,7 +6,7 @@ import {createTracker} from 'solid-meteor-data'
 import {defineTool} from './defineTool'
 import {currentRoom, currentPage, currentPageId, gotoPageId} from '../AppState'
 import {defaultGrid, defaultGridType} from '../Grid'
-import {browserId, deletePages, historyInfo, redoDelete, setPageLock, undoDelete} from '../PageTrash'
+import {deletePages, historyInfo, lockHolder, redoDelete, setPageLock, undoDelete} from '../PageTrash'
 import {Icon, modIcon, trashPath} from '../lib/icons'
 import {deletePlan} from '/lib/pageHistory'
 import {lockedPages, lockSummary} from '/lib/pageLocks'
@@ -416,7 +416,7 @@ defineTool
 lockHere = ->
   pageId = currentPage()?.id
   if pageId?
-    lockSummary currentRoom()?.data(), pageId, browserId
+    lockSummary currentRoom()?.data(), pageId, lockHolder
   else
     {count: 0, mine: false, others: 0}
 holdsHere = -> lockHere().mine

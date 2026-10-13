@@ -4,7 +4,7 @@ import Tooltip from 'solid-bootstrap/esm/Tooltip'
 import {createTracker} from 'solid-meteor-data'
 
 import {currentRoom, currentPage} from './AppState'
-import {browserId} from './PageTrash'
+import {lockHolder} from './PageTrash'
 import {SoloTooltip} from './SoloTooltip'
 import {Icon} from './lib/icons'
 import {lockSummary} from '/lib/pageLocks'
@@ -16,9 +16,9 @@ export PageList = ->
 
   ## How many users have a lock on a page (see /lib/pageLocks.coffee), and
   ## whether this browser is one of them
-  lockedBy = (pageId) -> lockSummary({locks: locks()}, pageId, browserId).count
+  lockedBy = (pageId) -> lockSummary({locks: locks()}, pageId, lockHolder).count
   lockText = (pageId) ->
-    {count, mine, others} = lockSummary {locks: locks()}, pageId, browserId
+    {count, mine, others} = lockSummary {locks: locks()}, pageId, lockHolder
     if mine
       if others
         "Locked by you and #{others} other #{if others == 1 then 'user' else 'users'}"

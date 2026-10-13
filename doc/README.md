@@ -945,8 +945,11 @@ brings pages back.
   open padlock while nobody has locked the page.  Pointing at it tells you who
   holds the locks.  If only others have locked the page, clicking it adds your
   own lock too, so the page stays locked when they remove theirs.  Nobody can
-  remove anyone else's lock.  Once the last lock is removed, the page is an
-  ordinary page again, and anybody can lock it.
+  remove anyone else's lock: a lock belongs to a secret key that your browser
+  keeps to itself, and what the room sees of it (the owner of the lock) cannot
+  be used to remove it.  A browser that loses its site data loses that key, and
+  can then no longer remove the locks it placed.  Once the last lock is
+  removed, the page is an ordinary page again, and anybody can lock it.
 * Locks are shared with everyone in the room, live, and they stay with the room
   (people who join later see them too).  Every locked page shows a padlock in
   front of its number in the page list, and pointing at it tells you who holds
@@ -966,7 +969,11 @@ brings pages back.
   a new message with a new 6 seconds.  The message appears only for deletions
   that you made, never when someone else tries to delete a locked page.
   If every page of the choice is locked (also when it is the only page of the
-  room), there is no dialog: you just get the message, and nothing is deleted.
+  room), there is no dialog: you just get the message, and nothing is deleted
+  or even sent to the room, so a lock that is removed a moment later does not
+  make that deletion happen.  The request after the dialog names exactly the
+  pages that the dialog said would be deleted, so a page that is unlocked
+  while the request is on its way stays too.
 * The message about locked pages and the question about deleted pages can be
   on the screen together, one below the other.  They count as one area:
   pressing inside either one closes neither, closing one (with its cross, with

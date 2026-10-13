@@ -6,7 +6,7 @@ import {validId} from './id'
 import {checkRoom} from './rooms'
 import {defaultGridType, validGridType} from './grid'
 import {deletionKinds, historyLimit, topOf} from './pageHistory'
-import {lockedPages} from './pageLocks'
+import {lockedPages, lockOwner, validLockKey} from './pageLocks'
 import {planOrderRestore} from './pageOrder'
 
 @Pages = new Mongo.Collection 'pages'
@@ -34,8 +34,11 @@ everyone in a room.  The rules, which everything below follows:
   pages of a deletion need not be next to each other.
   Undoing takes the deletion at the end of `undo` and puts it at the end of
   `redo`; it only ever brings pages back.  Redoing takes the deletion at the
-  end of `redo`, deletes its pages that are in the room, and puts the result
-  as a new deletion at the end of `undo`.
+  end of `redo`, deletes those of its pages that the person named, that are in
+  the room, and that are not locked, and puts the result as a new deletion at
+  the end of `undo`.  A deletion only ever deletes pages that the person named,
+  so that what a person confirmed is the most that happens, whatever other
+  people do (for example, unlock a page) while the request is on its way.
 * Undoing or redoing names the deletion it is for.  If that deletion is not the
   one at the end of its stack when the update happens (someone else changed
   the history after the person looked at it), nothing happens.
@@ -43,8 +46,11 @@ everyone in a room.  The rules, which everything below follows:
   caller says what ID the page gets, so that the page it shows at once is the
   page that is saved.
 * Anyone in the room can lock any page of it.  A lock is `{page, by}` in the
-  room's `locks`, where `by` is the browser that placed it; a browser has at
-  most one lock on a page, and only it can remove that lock.  A page that has
+  room's `locks`, where `by` is the owner of the lock, the SHA-256 of the secret
+  key of the browser that placed it (see ./pageLocks); a browser has at most one
+  lock on a page.  The key is only ever sent to the server, which works out
+  `by` from it, so only the browser that has the key can remove its lock: the
+  owners that everyone sees do not let anyone else do that.  A page that has
   any lock cannot be deleted, by anyone, including the browsers that locked it:
   deleting or redoing the deletion of pages leaves the locked ones alone and
   deletes the rest, and tells which ones it left.  A deletion that deletes no
@@ -119,14 +125,16 @@ updateRoom = (roomId, selector, changes, shows) ->
     throw error unless shows current
     true
 
-## Delete pages from a room, either the `requested` ones or, for redoing the
-## deletion `redoOf`, the pages of that deletion that are in the room, except
-## the locked ones.  This is the one update described at the top.  `recordId` is
-## the ID the new deletion gets, and `blank` is what the new blank page (if the
-## room needs one) is made from, with its ID.  Returns `{locked, blank}`:
+## Delete pages from a room: the `requested` ones or, for redoing the deletion
+## `redoOf`, those of the `requested` ones that are pages of that deletion, in
+## both cases the ones that are in the room, except the locked ones.  This is
+## the one update described at the top.  `recordId` is the ID the new deletion
+## gets, and `blank` is what the new blank page (if the room needs one) is made
+## from, with its ID.  Returns `{locked, blank}`:
 ## `locked` are the IDs of the requested pages that are in the room and locked,
 ## so were left alone, and `blank` is the ID of the blank page, if one was added.
 deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
+  named = new Set requested
   at = new Date
   wroteRecord = wroteBlank = committed = unsure = false
   locked = []
@@ -137,12 +145,13 @@ deleteStep = (roomId, requested, remoteId, kind, redoOf, blank, recordId) ->
       undo = room.undo ? []
       redo = room.redo ? []
       wanted = requested
-      ## Redoing: only the deletion undone last can be redone
+      ## Redoing: only the deletion undone last can be redone, and only its
+      ## pages that were asked for are deleted
       if redoOf?
         return {locked: []} unless topOf(redo) == redoOf
         redone = PageDeletions.findOne redoOf
         return {locked: []} unless redone?.room == roomId
-        wanted = redone.ids
+        wanted = (pageId for pageId in redone.ids when named.has pageId)
         kind = redone.kind
       ## Pages that are not in the room (e.g. already deleted by someone else at
       ## the same time) are left out, and so are the locked ones.
@@ -242,7 +251,8 @@ deleteStub = (roomId, requested, redoOf, blank) ->
   wanted = requested
   if redoOf?
     return {locked: []} unless topOf(room.redo) == redoOf
-    wanted = PageDeletions.findOne(redoOf)?.ids ? []
+    named = new Set requested
+    wanted = (pageId for pageId in (PageDeletions.findOne(redoOf)?.ids ? []) when named.has pageId)
   wanted = new Set wanted
   inRoom = (pageId for pageId in pages when wanted.has pageId)
   keep = lockedPages room
@@ -358,7 +368,7 @@ Meteor.methods
   ## (see the top), so that `pagesRestore` can put the pages back where they
   ## were.  `kind` is which of the four ways to delete this is.  `options` can
   ## have `redoOf`, the deletion being redone (it must be the latest one that was
-  ## undone; then `pageIds` is not used but its pages are deleted), and `blank`,
+  ## undone; then the pages of it that `pageIds` names are deleted), and `blank`,
   ## what a new blank page needs (its `id`, and how it looks) if deleting leaves
   ## the room with no page.  Locked pages are not deleted (see the top): if
   ## there is no other page to delete, nothing is done.
@@ -408,16 +418,18 @@ Meteor.methods
       restored.push back...
     restored
 
-  ## Lock a page for the browser `remoteId`, so that nobody can delete it, or
-  ## (`locked` false) remove that browser's lock on it.  The page stays locked
-  ## while any other browser has a lock on it.  Locking a page that is not in the
-  ## room (e.g. just deleted) does nothing.
-  pageLock: (pageId, locked, remoteId) ->
+  ## Lock a page for the browser that has the secret key `key`, so that nobody
+  ## can delete it, or (`locked` false) remove that browser's lock on it.  The
+  ## lock belongs to the owner that the key gives (see ./pageLocks), so only the
+  ## browser that has the key can remove it.  The page stays locked while any
+  ## other browser has a lock on it.  Locking a page that is not in the room
+  ## (e.g. just deleted) does nothing.
+  pageLock: (pageId, locked, key) ->
     check pageId, String
     check locked, Boolean
-    check remoteId, Match.Where validId
+    check key, Match.Where validLockKey
     roomId = checkPage(pageId).room
-    lock = {page: pageId, by: remoteId}
+    lock = {page: pageId, by: lockOwner key}
     if locked
       Rooms.update {_id: roomId, pages: pageId},
         $addToSet: locks: lock
