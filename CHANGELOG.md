@@ -29,9 +29,9 @@ instead of version numbers.
 * Add Lock Page button: any user in the room can lock any page so that nobody,
   including themselves, can delete it, and remove their own lock again.
   A page stays locked while any user has a lock on it.  Only the browser that
-  placed a lock can remove it: the room sees an owner that is made from a
-  secret key of the browser, never the key itself.  Locks are shared with
-  the room live, saved with it, and shown in the page list.
+  placed a lock can remove it, from any of its tabs: the room sees an owner
+  that is made from a secret key of the browser, never the key itself.  Locks
+  are shared with the room live, saved with it, and shown in the page list.
   Deleting several pages skips the locked ones and deletes the rest, and the
   user who tried is told which pages are locked (a message with a close button
   that goes away when clicking outside it, and after 6 seconds).  Both

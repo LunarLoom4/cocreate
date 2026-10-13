@@ -16,9 +16,9 @@ export PageList = ->
 
   ## How many users have a lock on a page (see /lib/pageLocks.coffee), and
   ## whether this browser is one of them
-  lockedBy = (pageId) -> lockSummary({locks: locks()}, pageId, lockHolder).count
+  lockedBy = (pageId) -> lockSummary({locks: locks()}, pageId, lockHolder()).count
   lockText = (pageId) ->
-    {count, mine, others} = lockSummary {locks: locks()}, pageId, lockHolder
+    {count, mine, others} = lockSummary {locks: locks()}, pageId, lockHolder()
     if mine
       if others
         "Locked by you and #{others} other #{if others == 1 then 'user' else 'users'}"

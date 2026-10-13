@@ -416,7 +416,7 @@ defineTool
 lockHere = ->
   pageId = currentPage()?.id
   if pageId?
-    lockSummary currentRoom()?.data(), pageId, lockHolder
+    lockSummary currentRoom()?.data(), pageId, lockHolder()
   else
     {count: 0, mine: false, others: 0}
 holdsHere = -> lockHere().mine
