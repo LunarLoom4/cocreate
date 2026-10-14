@@ -30,88 +30,54 @@ unless validId browserId
   try
     window.localStorage.setItem 'browserId', browserId
 
-## The secret key that proves that a page lock is this browser's.  A lock can
-## only be removed with the key that placed it, so every tab of the browser must
-## use the same key.  The key is kept in localStorage.  When there is none yet,
-## tabs that open together must not each make one: the last to save would win,
-## and the locks of the others could never be removed.  So the first key is
-## saved while holding a Web Lock, which lets one tab at a time do it, after
-## looking again for a key that another tab has just saved.  Until the key is
-## settled, locks wait (see `setPageLock`).  A tab that still ends up with a
-## different key (in a browser without Web Locks, or when the save of the other
-## tab had not reached it yet) follows the key that is saved, within
-## milliseconds.  Only the owner that the key gives (`lockHolder`) is ever shown
-## to the room, and the server works out the same owner from the key when it is
-## sent to place or remove a lock (see /lib/pageLocks.coffee).
-lockKeyName = 'lockKey'
-lockKeyWaitMs = 3000  # the longest wait for the Web Lock
+## The secret keys that prove that page locks are this browser's.  A lock can
+## only be removed with the key that placed it, so a key must never be lost, and
+## every tab must be able to use every key.  Normally the browser has one key,
+## saved in localStorage.  Tabs that open at the same moment, before any key is
+## saved, can each make one; each saves its own key under its own name, so none
+## is overwritten, and the tabs learn each other's keys from storage.  All the
+## keys count as this browser: a lock is removed with every key that the browser
+## has (see `setPageLock`), and `lockHolders` lists the owners that they give.
+## Only owners are ever shown to the room, and the server works out the same
+## owner from a key when it is sent to place or remove a lock (see
+## /lib/pageLocks.coffee).
+lockKeyEntry = 'lockKey'  # the name of a saved key: this, or this and a dot and more
 
-savedLockKey = ->
-  key = null
+isLockKeyEntry = (name) ->
+  name == lockKeyEntry or (typeof name == 'string' and name.startsWith "#{lockKeyEntry}.")
+
+## The keys saved in this browser, in order
+savedLockKeys = ->
+  found = []
   try
-    key = window.localStorage.getItem lockKeyName
-  if validLockKey key then key else null
+    for index in [0...window.localStorage.length]
+      entry = window.localStorage.key index
+      continue unless isLockKeyEntry entry
+      saved = window.localStorage.getItem entry
+      found.push saved if validLockKey(saved) and saved not in found
+  found.sort()
 
-lockKey = savedLockKey()
-lockKeySettled = lockKey?
-lockKey ?= Random.secret()
-[ownerOfLocks, setOwnerOfLocks] = createSignal lockOwner lockKey
-## The owner of this browser's locks: what `by` is in the locks that it placed.
-## Reactive, because it changes if this tab has to follow another tab's key.
-export lockHolder = ownerOfLocks
-
-useLockKey = (key) ->
-  return if key == lockKey
-  lockKey = key
-  setOwnerOfLocks lockOwner key
-
-waitingForLockKey = []
-whenLockKeySettled = (callback) ->
-  if lockKeySettled
-    callback()
-  else
-    waitingForLockKey.push callback
-  return
-
-## Use the key that is saved, or save this tab's key if there is none
-settleLockKey = ->
-  key = savedLockKey()
-  if key?
-    useLockKey key
-  else
-    try
-      window.localStorage.setItem lockKeyName, lockKey
-  lockKeySettled = true
-  waiting = waitingForLockKey
-  waitingForLockKey = []
-  callback() for callback in waiting
-  return
-
-## Settle the key while holding the Web Lock.  If the lock is not granted in
-## time or Web Locks fail, settle it without.
-settleLockKeyWithWebLock = ->
-  controller = new AbortController
-  settle = ->
-    clearTimeout giveUp
-    settleLockKey() unless lockKeySettled
-    return
-  giveUp = setTimeout (-> controller.abort(); settle()), lockKeyWaitMs
+lockKeys = savedLockKeys()
+unless lockKeys.length
+  lockKeys = [Random.secret()]
   try
-    window.navigator.locks.request('cocreate.lockKey', {signal: controller.signal}, settle).catch settle
-  catch
-    settle()
-  return
+    window.localStorage.setItem "#{lockKeyEntry}.#{lockOwner(lockKeys[0]).slice 0, 16}", lockKeys[0]
+[ownersOfLocks, setOwnersOfLocks] = createSignal lockKeys.map lockOwner
+## The owners of this browser's locks: what `by` is in the locks that it placed.
+## Reactive, because tabs learn keys while they are open.
+export lockHolders = ownersOfLocks
 
-unless lockKeySettled
-  if window.navigator.locks?.request? and window.AbortController?
-    settleLockKeyWithWebLock()
-  else
-    settleLockKey()
+## Learn the keys that other tabs have saved.  A key that this tab knows is never
+## forgotten, even if it is no longer saved.
+export learnLockKeys = ->
+  learned = (saved for saved in savedLockKeys() when saved not in lockKeys)
+  return unless learned.length
+  lockKeys = lockKeys.concat(learned).sort()
+  setOwnersOfLocks lockKeys.map lockOwner
+  return
 
 window.addEventListener 'storage', (e) ->
-  return unless e.key == lockKeyName
-  key = savedLockKey()
-  useLockKey key if key?
+  learnLockKeys() if isLockKeyEntry e.key
 
 ## Deletions that this browser has already answered about in each room, as a
 ## set of deletion IDs, saved one by one (see ./lib/storageSet).  `seen` is
@@ -311,8 +277,11 @@ export redoDelete = (id) ->
 ## delete it, or (`locked` false) remove this browser's lock on it.  The page
 ## stays locked while any other browser has a lock on it.
 export setPageLock = (pageId, locked) ->
-  whenLockKeySettled ->
-    Meteor.call 'pageLock', pageId, locked, lockKey, (error) ->
+  learnLockKeys()
+  ## A lock is placed with one key, and removed with every key that the browser
+  ## has, so that it goes whichever key placed it
+  for key in (if locked then [lockKeys[0]] else lockKeys)
+    Meteor.call 'pageLock', pageId, locked, key, (error) ->
       if error?
         console.error "Failed to #{if locked then 'lock' else 'unlock'} page on server: #{error}"
   return

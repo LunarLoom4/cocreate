@@ -6,7 +6,7 @@ import {createTracker} from 'solid-meteor-data'
 import {defineTool} from './defineTool'
 import {currentRoom, currentPage, currentPageId, gotoPageId} from '../AppState'
 import {defaultGrid, defaultGridType} from '../Grid'
-import {deletePages, historyInfo, lockHolder, redoDelete, setPageLock, undoDelete} from '../PageTrash'
+import {deletePages, historyInfo, learnLockKeys, lockHolders, redoDelete, setPageLock, undoDelete} from '../PageTrash'
 import {Icon, modIcon, trashPath} from '../lib/icons'
 import {deletePlan} from '/lib/pageHistory'
 import {lockedPages, lockSummary} from '/lib/pageLocks'
@@ -416,7 +416,7 @@ defineTool
 lockHere = ->
   pageId = currentPage()?.id
   if pageId?
-    lockSummary currentRoom()?.data(), pageId, lockHolder()
+    lockSummary currentRoom()?.data(), pageId, lockHolders()
   else
     {count: 0, mine: false, others: 0}
 holdsHere = -> lockHere().mine
@@ -442,4 +442,5 @@ defineTool
   click: ->
     pageId = currentPage()?.id
     return unless pageId?
+    learnLockKeys()  # whether this browser holds the lock depends on all its keys
     setPageLock pageId, not holdsHere()

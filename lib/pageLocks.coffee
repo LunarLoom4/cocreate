@@ -10,7 +10,9 @@
 ## SHA-256 of a secret key that the browser keeps to itself (see `lockOwner`).
 ## Everyone in the room sees the owners of the locks, and nobody can work out
 ## the key from an owner, so only the browser with the key can name the owner
-## and so remove the lock.
+## and so remove the lock.  A browser normally has one key; if tabs that opened
+## at the same moment each made one, it has more, and all of its keys, and so
+## all of its owners, count as the same browser.
 
 import {sha256} from './sha256'
 
@@ -25,9 +27,15 @@ export lockOwner = (key) -> sha256 key
 export lockedPages = (room) ->
   new Set (lock.page for lock in room?.locks ? [])
 
-## Whether the owner `holder` has a lock on the page
-export holdsLock = (room, pageId, holder) ->
-  (room?.locks ? []).some (lock) -> lock.page == pageId and lock.by == holder
+## The owners `holders` (one owner, or a list of them) as a list
+holdersList = (holders) ->
+  if Array.isArray holders then holders else [holders]
+
+## Whether any of the owners `holders` (one owner, or a list of them) has a lock
+## on the page
+export holdsLock = (room, pageId, holders) ->
+  mine = holdersList holders
+  (room?.locks ? []).some (lock) -> lock.page == pageId and lock.by in mine
 
 ## How many owners (browsers) have a lock on the page
 export lockCount = (room, pageId) ->
@@ -36,13 +44,20 @@ export lockCount = (room, pageId) ->
     holders.add lock.by
   holders.size
 
-## Who has locked a page, from the point of view of the owner `holder`: how many
-## owners have a lock on it, whether `holder` is one of them, and how many others
-## are
-export lockSummary = (room, pageId, holder) ->
-  count = lockCount room, pageId
-  mine = holdsLock room, pageId, holder
-  {count, mine, others: count - (if mine then 1 else 0)}
+## Who has locked a page, from the point of view of the browser whose owners are
+## `holders` (one owner, or a list of them): how many browsers have a lock on it,
+## whether this browser is one of them, and how many others are.  All the owners
+## of this browser count as one.
+export lockSummary = (room, pageId, holders) ->
+  mine = holdersList holders
+  owners = new Set
+  for lock in room?.locks ? [] when lock.page == pageId
+    owners.add lock.by
+  others = 0
+  held = false
+  owners.forEach (owner) ->
+    if owner in mine then held = true else others += 1
+  {count: others + (if held then 1 else 0), mine: held, others}
 
 ## Split page IDs into the ones that a deletion can delete and the ones that are
 ## locked and stay, each in the order given

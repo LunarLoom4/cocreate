@@ -47,8 +47,9 @@ everyone in a room.  The rules, which everything below follows:
   page that is saved.
 * Anyone in the room can lock any page of it.  A lock is `{page, by}` in the
   room's `locks`, where `by` is the owner of the lock, the SHA-256 of the secret
-  key of the browser that placed it (see ./pageLocks); a browser has at most one
-  lock on a page.  The key is only ever sent to the server, which works out
+  key of the browser that placed it (see ./pageLocks); a key has at most one
+  lock on a page, and a browser normally has one key.  The key is only ever
+  sent to the server, which works out
   `by` from it, so only the browser that has the key can remove its lock: the
   owners that everyone sees do not let anyone else do that.  A page that has
   any lock cannot be deleted, by anyone, including the browsers that locked it:
