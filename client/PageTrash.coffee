@@ -78,6 +78,10 @@ export learnLockKeys = ->
 
 window.addEventListener 'storage', (e) ->
   learnLockKeys() if isLockKeyEntry e.key
+## A tab that was still loading when another tab saved a key may not be sent the
+## `storage` event, so a tab also looks again when the person comes back to it
+window.addEventListener 'focus', -> learnLockKeys()
+document.addEventListener 'visibilitychange', -> learnLockKeys() unless document.hidden
 
 ## Deletions that this browser has already answered about in each room, as a
 ## set of deletion IDs, saved one by one (see ./lib/storageSet).  `seen` is
