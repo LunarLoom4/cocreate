@@ -228,7 +228,9 @@ DeleteOverlays = ->
     ## because holding Space keeps sending repeated key presses to the popup.
     onKeyDown = (e) ->
       e.stopPropagation()
-      switch e.key
+      ## WebKit on GTK reports Shift+Tab as the key "Unidentified", but its
+      ## `code` is still "Tab"
+      switch (if e.code == 'Tab' then 'Tab' else e.key)
         when 'Escape'
           e.preventDefault()
           if pending() then closeDialog true else closeMenu()
